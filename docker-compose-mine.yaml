@@ -8,11 +8,11 @@ services:
     ports:
       - "3002"
     environment:
-      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
-      - REDIS_RATE_LIMIT_URL=${REDIS_URL:-redis://redis:6379}
-      - PLAYWRIGHT_MICROSERVICE_URL=${PLAYWRIGHT_MICROSERVICE_URL:-http://playwright-service:3000}
+      - REDIS_URL=redis://redis:6379
+      - REDIS_RATE_LIMIT_URL=redis://redis:6379
+      - PLAYWRIGHT_MICROSERVICE_URL=http://playwright-service:3000
       - USE_DB_AUTHENTICATION=${USE_DB_AUTHENTICATION:-false}
-      - PORT=${PORT:-3002}
+      - PORT=3002
       - NUM_WORKERS_PER_QUEUE=${NUM_WORKERS_PER_QUEUE:-1}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
@@ -28,9 +28,10 @@ services:
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_SERVICE_TOKEN=${SUPABASE_SERVICE_TOKEN}
       - SCRAPING_BEE_API_KEY=${SCRAPING_BEE_API_KEY}
-      - HOST=${HOST:-0.0.0.0}
+      - HOST=0.0.0.0
       - SELF_HOSTED_WEBHOOK_URL=${SELF_HOSTED_WEBHOOK_URL}
       - LOGGING_LEVEL=${LOGGING_LEVEL:-info}
+      - FIRECRAWL_API_KEY=${FIRECRAWL_API_KEY}
     command: [ "pnpm", "run", "start:production" ]
     depends_on:
       - redis
@@ -41,9 +42,9 @@ services:
       context: ./apps/api
       dockerfile: Dockerfile
     environment:
-      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
-      - REDIS_RATE_LIMIT_URL=${REDIS_URL:-redis://redis:6379}
-      - PLAYWRIGHT_MICROSERVICE_URL=${PLAYWRIGHT_MICROSERVICE_URL:-http://playwright-service:3000}
+      - REDIS_URL=redis://redis:6379
+      - REDIS_RATE_LIMIT_URL=redis://redis:6379
+      - PLAYWRIGHT_MICROSERVICE_URL=http://playwright-service:3000
       - USE_DB_AUTHENTICATION=${USE_DB_AUTHENTICATION:-false}
       - NUM_WORKERS_PER_QUEUE=${NUM_WORKERS_PER_QUEUE:-1}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
@@ -60,9 +61,10 @@ services:
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_SERVICE_TOKEN=${SUPABASE_SERVICE_TOKEN}
       - SCRAPING_BEE_API_KEY=${SCRAPING_BEE_API_KEY}
-      - HOST=${HOST:-0.0.0.0}
+      - HOST=0.0.0.0
       - SELF_HOSTED_WEBHOOK_URL=${SELF_HOSTED_WEBHOOK_URL}
       - LOGGING_LEVEL=${LOGGING_LEVEL:-info}
+      - FIRECRAWL_API_KEY=${FIRECRAWL_API_KEY}
     command: [ "pnpm", "run", "workers" ]
     depends_on:
       - redis
@@ -89,6 +91,18 @@ services:
     volumes:
       - redis_data:/data
     command: redis-server --appendonly yes
+
+  ui:
+    build:
+      context: ./apps/ui/ingestion-ui
+      dockerfile: Dockerfile
+    ports:
+      - ":3000"
+    environment:
+      - REACT_APP_FIRECRAWL_API_URL=http://api:3002
+      - REACT_APP_FIRECRAWL_API_KEY=${FIRECRAWL_API_KEY}
+    depends_on:
+      - api
 
 volumes:
   redis_data:
