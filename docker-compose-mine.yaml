@@ -99,8 +99,8 @@ services:
     ports:
       - ":3000"
     environment:
-      - REACT_APP_FIRECRAWL_API_URL=http://api:3002
-      - REACT_APP_FIRECRAWL_API_KEY=${FIRECRAWL_API_KEY}
+      - VITE_FIRECRAWL_API_URL=http://api:3002
+      - VITE_FIRECRAWL_API_KEY=${FIRECRAWL_API_KEY:-default-test-key}
     depends_on:
       - api
 
