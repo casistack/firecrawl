@@ -19,8 +19,11 @@ import { ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
 
 //! Hardcoded values (not recommended for production)
 //! Highly recommended to move all Firecrawl API calls to the backend (e.g. Next.js API route)
-const FIRECRAWL_API_URL = "https://api.firecrawl.dev"; // Replace with your actual API URL whether it is local or using Firecrawl Cloud
-const FIRECRAWL_API_KEY = "fc-YOUR_API_KEY"; // Replace with your actual API key
+///const FIRECRAWL_API_URL = "https://api.firecrawl.dev"; // Replace with your actual API URL whether it is local or using Firecrawl Cloud
+///const FIRECRAWL_API_KEY = "fc-YOUR_API_KEY"; // Replace with your actual API key
+
+const FIRECRAWL_API_URL = process.env.REACT_APP_FIRECRAWL_API_URL;
+const FIRECRAWL_API_KEY = process.env.REACT_APP_FIRECRAWL_API_KEY;
 
 interface FormData {
   url: string;
