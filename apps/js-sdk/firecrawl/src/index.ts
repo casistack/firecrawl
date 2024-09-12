@@ -1,5 +1,5 @@
-import axios, { AxiosResponse, AxiosRequestHeaders } from "axios";
-import { z } from "zod";
+import axios, { type AxiosResponse, type AxiosRequestHeaders } from "axios";
+import type { ZodSchema } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { WebSocket } from "isows";
 import { TypedEventTarget } from "typescript-event-target";
@@ -81,7 +81,7 @@ export interface ScrapeParams {
   onlyMainContent?: boolean;
   extract?: {
     prompt?: string;
-    schema?: z.ZodSchema | any;
+    schema?: ZodSchema | any;
     systemPrompt?: string;
   };
   waitFor?: number;
@@ -183,7 +183,11 @@ export default class FirecrawlApp {
    * @param config - Configuration options for the FirecrawlApp instance.
    */
   constructor({ apiKey = null, apiUrl = null }: FirecrawlAppConfig) {
-    this.apiKey = apiKey || "";
+    if (typeof apiKey !== "string") {
+      throw new Error("No API key provided");
+    }
+
+    this.apiKey = apiKey;
     this.apiUrl = apiUrl || "https://api.firecrawl.dev";
   }
 
@@ -342,9 +346,9 @@ export default class FirecrawlApp {
         `${this.apiUrl}/v1/crawl/${id}`,
         headers
       );
-      if (response.status === 200 && getAllData) {
+      if (response.status === 200) {
         let allData = response.data.data;
-        if (response.data.status === "completed") {
+        if (getAllData && response.data.status === "completed") {
           let statusData = response.data
           if ("data" in statusData) {
             let data = statusData.data;
