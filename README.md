@@ -1,4 +1,5 @@
 <h3 align="center">
+  <a name="readme-top"></a>
   <img
     src="https://raw.githubusercontent.com/mendableai/firecrawl/main/img/firecrawl_logo.png"
     height="200"
@@ -34,9 +35,9 @@
 
 # 🔥 Firecrawl
 
-Crawl and convert any website into LLM-ready markdown or structured data. Built by [Mendable.ai](https://mendable.ai?ref=gfirecrawl) and the Firecrawl community. Includes powerful scraping, crawling and data extraction capabilities.
+Empower your AI apps with clean data from any website. Featuring advanced scraping, crawling, and data extraction capabilities.
 
-_This repository is in its early development stages. We are still merging custom modules in the mono repo. It's not completely yet ready for full self-host deployment, but you can already run it locally._
+_This repository is in development, and we’re still integrating custom modules into the mono repo. It's not fully ready for self-hosted deployment yet, but you can run it locally._
 
 ## What is Firecrawl?
 
@@ -52,18 +53,12 @@ _Pst. hey, you, join our stargazers :)_
 
 We provide an easy to use API with our hosted version. You can find the playground and documentation [here](https://firecrawl.dev/playground). You can also self host the backend if you'd like.
 
-- [x] [API](https://firecrawl.dev/playground)
-- [x] [Python SDK](https://github.com/mendableai/firecrawl/tree/main/apps/python-sdk)
-- [x] [Node SDK](https://github.com/mendableai/firecrawl/tree/main/apps/js-sdk)
-- [x] [Langchain Integration 🦜🔗](https://python.langchain.com/docs/integrations/document_loaders/firecrawl/)
-- [x] [Langchain JS Integration 🦜🔗](https://js.langchain.com/docs/integrations/document_loaders/web_loaders/firecrawl)
-- [x] [Llama Index Integration 🦙](https://docs.llamaindex.ai/en/latest/examples/data_connectors/WebPageDemo/#using-firecrawl-reader)
-- [x] [Dify Integration](https://dify.ai/blog/dify-ai-blog-integrated-with-firecrawl)
-- [x] [Langflow Integration](https://docs.langflow.org/)
-- [x] [Crew.ai Integration](https://docs.crewai.com/)
-- [x] [Flowise AI Integration](https://docs.flowiseai.com/integrations/langchain/document-loaders/firecrawl)
-- [x] [PraisonAI Integration](https://docs.praison.ai/firecrawl/)
-- [x] [Zapier Integration](https://zapier.com/apps/firecrawl/integrations)
+Check out the following resources to get started:
+- [x] **API**: [Documentation](https://docs.firecrawl.dev/api-reference/introduction)
+- [x] **SDKs**: [Python](https://docs.firecrawl.dev/sdks/python), [Node](https://docs.firecrawl.dev/sdks/node), [Go](https://docs.firecrawl.dev/sdks/go), [Rust](https://docs.firecrawl.dev/sdks/rust)
+- [x] **LLM Frameworks**: [Langchain (python)](https://python.langchain.com/docs/integrations/document_loaders/firecrawl/), [Langchain (js)](https://js.langchain.com/docs/integrations/document_loaders/web_loaders/firecrawl), [Llama Index](https://docs.llamaindex.ai/en/latest/examples/data_connectors/WebPageDemo/#using-firecrawl-reader), [Crew.ai](https://docs.crewai.com/), [Composio](https://composio.dev/tools/firecrawl/all), [PraisonAI](https://docs.praison.ai/firecrawl/), [Superinterface](https://superinterface.ai/docs/assistants/functions/firecrawl), [Vectorize](https://docs.vectorize.io/integrations/source-connectors/firecrawl)
+- [x] **Low-code Frameworks**: [Dify](https://dify.ai/blog/dify-ai-blog-integrated-with-firecrawl), [Langflow](https://docs.langflow.org/), [Flowise AI](https://docs.flowiseai.com/integrations/langchain/document-loaders/firecrawl), [Cargo](https://docs.getcargo.io/integration/firecrawl), [Pipedream](https://pipedream.com/apps/firecrawl/)
+- [x] **Others**: [Zapier](https://zapier.com/apps/firecrawl/integrations), [Pabbly Connect](https://www.pabbly.com/connect/integrations/firecrawl/)
 - [ ] Want an SDK or Integration? Let us know by opening an issue.
 
 To run locally, refer to guide [here](https://github.com/mendableai/firecrawl/blob/main/CONTRIBUTING.md).
@@ -71,6 +66,23 @@ To run locally, refer to guide [here](https://github.com/mendableai/firecrawl/bl
 ### API Key
 
 To use the API, you need to sign up on [Firecrawl](https://firecrawl.dev) and get an API key.
+
+### Features
+
+- [**Scrape**](#scraping): scrapes a URL and get its content in LLM-ready format (markdown, structured data via [LLM Extract](#llm-extraction-beta), screenshot, html)
+- [**Crawl**](#crawling): scrapes all the URLs of a web page and return content in LLM-ready format
+- [**Map**](#map-alpha): input a website and get all the website urls - extremely fast
+
+### Powerful Capabilities
+- **LLM-ready formats**: markdown, structured data, screenshot, HTML, links, metadata
+- **The hard stuff**: proxies, anti-bot mechanisms, dynamic content (js-rendered), output parsing, orchestration
+- **Customizability**: exclude tags, crawl behind auth walls with custom headers, max crawl depth, etc...
+- **Media parsing**: pdfs, docx, images
+- **Reliability first**: designed to get the data you need - no matter how hard it is
+- **Actions**: click, scroll, input, wait and more before extracting data
+- **Batching (New)**: scrape thousands of URLs at the same time with a new async endpoint.
+
+You can find all of Firecrawl's capabilities and how to use them in our [documentation](https://docs.firecrawl.dev)
 
 ### Crawling
 
@@ -311,20 +323,60 @@ curl -X POST https://api.firecrawl.dev/v1/scrape \
     }'
 ```
 
+### Interacting with the page with Actions (Cloud-only)
 
-### Search (v0) (Beta)
+Firecrawl allows you to perform various actions on a web page before scraping its content. This is particularly useful for interacting with dynamic content, navigating through pages, or accessing content that requires user interaction.
 
-Used to search the web, get the most relevant results, scrape each page and return the markdown.
+Here is an example of how to use actions to navigate to google.com, search for Firecrawl, click on the first result, and take a screenshot.
 
 ```bash
-curl -X POST https://api.firecrawl.dev/v0/search \
+curl -X POST https://api.firecrawl.dev/v1/scrape \
     -H 'Content-Type: application/json' \
     -H 'Authorization: Bearer YOUR_API_KEY' \
     -d '{
-      "query": "firecrawl",
-      "pageOptions": {
-        "fetchPageContent": true // false for a fast serp api
-      }
+        "url": "google.com",
+        "formats": ["markdown"],
+        "actions": [
+            {"type": "wait", "milliseconds": 2000},
+            {"type": "click", "selector": "textarea[title=\"Search\"]"},
+            {"type": "wait", "milliseconds": 2000},
+            {"type": "write", "text": "firecrawl"},
+            {"type": "wait", "milliseconds": 2000},
+            {"type": "press", "key": "ENTER"},
+            {"type": "wait", "milliseconds": 3000},
+            {"type": "click", "selector": "h3"},
+            {"type": "wait", "milliseconds": 3000},
+            {"type": "screenshot"}
+        ]
+    }'
+```
+
+### Batch Scraping Multiple URLs (New)
+
+You can now batch scrape multiple URLs at the same time. It is very similar to how the /crawl endpoint works. It submits a batch scrape job and returns a job ID to check the status of the batch scrape.
+
+```bash
+curl -X POST https://api.firecrawl.dev/v1/batch/scrape \
+    -H 'Content-Type: application/json' \
+    -H 'Authorization: Bearer YOUR_API_KEY' \
+    -d '{
+      "urls": ["https://docs.firecrawl.dev", "https://docs.firecrawl.dev/sdks/overview"],
+      "formats" : ["markdown", "html"]
+    }'
+```
+
+### Search
+
+The search endpoint combines web search with Firecrawl’s scraping capabilities to return full page content for any query.
+
+Include `scrapeOptions` with `formats: ["markdown"]` to get complete markdown content for each search result otherwise it defaults to getting SERP results (url, title, description).
+
+```bash
+curl -X POST https://api.firecrawl.dev/v1/search \
+    -H 'Content-Type: application/json' \
+    -H 'Authorization: Bearer YOUR_API_KEY' \
+    -d '{
+      "query": "What is Mendable?"
     }'
 ```
 
@@ -334,14 +386,8 @@ curl -X POST https://api.firecrawl.dev/v0/search \
   "data": [
     {
       "url": "https://mendable.ai",
-      "markdown": "# Markdown Content",
-      "provider": "web-scraper",
-      "metadata": {
-        "title": "Mendable | AI for CX and Sales",
-        "description": "AI for CX and Sales",
-        "language": null,
-        "sourceURL": "https://www.mendable.ai/"
-      }
+      "title": "Mendable | AI for CX and Sales",
+      "description": "AI for CX and Sales"
     }
   ]
 }
@@ -375,8 +421,7 @@ crawl_status = app.crawl_url(
   params={
     'limit': 100, 
     'scrapeOptions': {'formats': ['markdown', 'html']}
-  }, 
-  wait_until_done=True, 
+  },
   poll_interval=30
 )
 print(crawl_status)
@@ -445,7 +490,7 @@ const crawlResponse = await app.crawlUrl('https://firecrawl.dev', {
   scrapeOptions: {
     formats: ['markdown', 'html'],
   }
-} as CrawlParams, true, 30) as CrawlStatusResponse;
+} satisfies CrawlParams, true, 30) satisfies CrawlStatusResponse;
 
 if (crawlResponse) {
   console.log(crawlResponse)
@@ -455,7 +500,7 @@ if (crawlResponse) {
 
 ### Extracting structured data from a URL
 
-With LLM extraction, you can easily extract structured data from any URL. We support zod schema to make it easier for you too. Here is how you to use it:
+With LLM extraction, you can easily extract structured data from any URL. We support zod schema to make it easier for you too. Here is how to use it:
 
 ```js
 import FirecrawlApp from "@mendable/firecrawl-js";
@@ -487,11 +532,28 @@ const scrapeResult = await app.scrapeUrl("https://news.ycombinator.com", {
 console.log(scrapeResult.data["llm_extraction"]);
 ```
 
+## Open Source vs Cloud Offering
+
+Firecrawl is open source available under the AGPL-3.0 license. 
+
+To deliver the best possible product, we offer a hosted version of Firecrawl alongside our open-source offering. The cloud solution allows us to continuously innovate and maintain a high-quality, sustainable service for all users.
+
+Firecrawl Cloud is available at [firecrawl.dev](https://firecrawl.dev) and offers a range of features that are not available in the open source version:
+
+![Open Source vs Cloud Offering](https://raw.githubusercontent.com/mendableai/firecrawl/main/img/open-source-cloud.png)
+
+
 ## Contributing
 
-We love contributions! Please read our [contributing guide](CONTRIBUTING.md) before submitting a pull request.
+We love contributions! Please read our [contributing guide](CONTRIBUTING.md) before submitting a pull request. If you'd like to self-host, refer to the [self-hosting guide](SELF_HOST.md).
 
 _It is the sole responsibility of the end users to respect websites' policies when scraping, searching and crawling with Firecrawl. Users are advised to adhere to the applicable privacy policies and terms of use of the websites prior to initiating any scraping activities. By default, Firecrawl respects the directives specified in the websites' robots.txt files when crawling. By utilizing Firecrawl, you expressly agree to comply with these conditions._
+
+## Contributors
+
+<a href="https://github.com/mendableai/firecrawl/graphs/contributors">
+  <img alt="contributors" src="https://contrib.rocks/image?repo=mendableai/firecrawl"/>
+</a>
 
 ## License Disclaimer
 
@@ -504,3 +566,10 @@ Please note:
 - When using or contributing to this project, ensure you comply with the appropriate license terms for the specific component you are working with.
 
 For more details on the licensing of specific components, please refer to the LICENSE files in the respective directories or contact the project maintainers.
+
+
+<p align="right" style="font-size: 14px; color: #555; margin-top: 20px;">
+    <a href="#readme-top" style="text-decoration: none; color: #007bff; font-weight: bold;">
+        ↑ Back to Top ↑
+    </a>
+</p>

@@ -4,9 +4,8 @@ import {
   CrawlRequest,
   crawlRequestSchema,
   CrawlResponse,
-  legacyCrawlerOptions,
-  legacyScrapeOptions,
   RequestWithAuth,
+  toLegacyCrawlerOptions,
 } from "./types";
 import {
   addCrawlJob,
@@ -19,29 +18,51 @@ import {
 } from "../../lib/crawl-redis";
 import { logCrawl } from "../../services/logging/crawl_log";
 import { getScrapeQueue } from "../../services/queue-service";
-import { addScrapeJob } from "../../services/queue-jobs";
-import { Logger } from "../../lib/logger";
+import { _addScrapeJobToBullMQ, addScrapeJob, addScrapeJobs } from "../../services/queue-jobs";
+import { logger as _logger } from "../../lib/logger";
 import { getJobPriority } from "../../lib/job-priority";
 import { callWebhook } from "../../services/webhook";
+import { scrapeOptions as scrapeOptionsSchema } from "./types";
 
 export async function crawlController(
   req: RequestWithAuth<{}, CrawlResponse, CrawlRequest>,
-  res: Response<CrawlResponse>
+  res: Response<CrawlResponse>,
 ) {
+  const preNormalizedBody = req.body;
   req.body = crawlRequestSchema.parse(req.body);
 
   const id = uuidv4();
+  const logger = _logger.child({
+    crawlId: id,
+    module: "api/v1",
+    method: "crawlController",
+    teamId: req.auth.team_id,
+    plan: req.auth.plan,
+  });
+  logger.debug("Crawl " + id + " starting", {
+    request: req.body,
+    originalRequest: preNormalizedBody,
+    account: req.account,
+  });
 
   await logCrawl(id, req.auth.team_id);
 
-  const { remainingCredits } = req.account;
+  let { remainingCredits } = req.account!;
+  const useDbAuthentication = process.env.USE_DB_AUTHENTICATION === "true";
+  if (!useDbAuthentication) {
+    remainingCredits = Infinity;
+  }
 
-  const crawlerOptions = legacyCrawlerOptions(req.body);
-  const pageOptions = legacyScrapeOptions(req.body.scrapeOptions);
+  const crawlerOptions = {
+    ...req.body,
+    url: undefined,
+    scrapeOptions: undefined,
+  };
+  const scrapeOptions = req.body.scrapeOptions;
 
   // TODO: @rafa, is this right? copied from v0
-  if (Array.isArray(crawlerOptions.includes)) {
-    for (const x of crawlerOptions.includes) {
+  if (Array.isArray(crawlerOptions.includePaths)) {
+    for (const x of crawlerOptions.includePaths) {
       try {
         new RegExp(x);
       } catch (e) {
@@ -50,8 +71,8 @@ export async function crawlController(
     }
   }
 
-  if (Array.isArray(crawlerOptions.excludes)) {
-    for (const x of crawlerOptions.excludes) {
+  if (Array.isArray(crawlerOptions.excludePaths)) {
+    for (const x of crawlerOptions.excludePaths) {
       try {
         new RegExp(x);
       } catch (e) {
@@ -60,12 +81,19 @@ export async function crawlController(
     }
   }
 
+  const originalLimit = crawlerOptions.limit;
   crawlerOptions.limit = Math.min(remainingCredits, crawlerOptions.limit);
-  
+  logger.debug("Determined limit: " + crawlerOptions.limit, {
+    remainingCredits,
+    bodyLimit: originalLimit,
+    originalBodyLimit: preNormalizedBody.limit,
+  });
+
   const sc: StoredCrawl = {
     originUrl: req.body.url,
-    crawlerOptions,
-    pageOptions,
+    crawlerOptions: toLegacyCrawlerOptions(crawlerOptions),
+    scrapeOptions,
+    internalOptions: { disableSmartWaitCache: true }, // NOTE: smart wait disabled for crawls to ensure contentful scrape, speed does not matter
     team_id: req.auth.team_id,
     createdAt: Date.now(),
     plan: req.auth.plan,
@@ -74,94 +102,34 @@ export async function crawlController(
   const crawler = crawlToCrawler(id, sc);
 
   try {
-    sc.robots = await crawler.getRobotsTxt();
+    sc.robots = await crawler.getRobotsTxt(scrapeOptions.skipTlsVerification);
   } catch (e) {
-    Logger.debug(
-      `[Crawl] Failed to get robots.txt (this is probably fine!): ${JSON.stringify(
-        e
-      )}`
-    );
+    logger.debug("Failed to get robots.txt (this is probably fine!)", {
+      error: e,
+    });
   }
 
   await saveCrawl(id, sc);
 
-  const sitemap = sc.crawlerOptions.ignoreSitemap
-    ? null
-    : await crawler.tryGetSitemap();
-
-  if (sitemap !== null && sitemap.length > 0) {
-    let jobPriority = 20;
-      // If it is over 1000, we need to get the job priority,
-      // otherwise we can use the default priority of 20
-      if(sitemap.length > 1000){
-        // set base to 21
-        jobPriority = await getJobPriority({plan: req.auth.plan, team_id: req.auth.team_id, basePriority: 21})
-      }
-    const jobs = sitemap.map((x) => {
-      const url = x.url;
-      const uuid = uuidv4();
-      return {
-        name: uuid,
-        data: {
-          url,
-          mode: "single_urls",
-          team_id: req.auth.team_id,
-          crawlerOptions,
-          pageOptions,
-          origin: "api",
-          crawl_id: id,
-          sitemapped: true,
-          webhook: req.body.webhook,
-          v1: true,
-        },
-        opts: {
-          jobId: uuid,
-          priority: 20,
-        },
-      };
-    });
-
-    await lockURLs(
-      id,
-      jobs.map((x) => x.data.url)
-    );
-    await addCrawlJobs(
-      id,
-      jobs.map((x) => x.opts.jobId)
-    );
-    await getScrapeQueue().addBulk(jobs);
-  } else {
-    await lockURL(id, sc, req.body.url);
-    const job = await addScrapeJob(
-      {
-        url: req.body.url,
-        mode: "single_urls",
-        crawlerOptions: crawlerOptions,
-        team_id: req.auth.team_id,
-        pageOptions: pageOptions,
-        origin: "api",
-        crawl_id: id,
-        webhook: req.body.webhook,
-        v1: true,
-      },
-      {
-        priority: 15,
-      }
-    );
-    await addCrawlJob(id, job.id);
-  }
-
-  if(req.body.webhook) {
-    await callWebhook(req.auth.team_id, id, null, req.body.webhook, true, "crawl.started");
-  }
-
-  const protocol = process.env.ENV === "local" ? req.protocol : "https";
+  await _addScrapeJobToBullMQ({
+    url: req.body.url,
+    mode: "kickoff" as const,
+    team_id: req.auth.team_id,
+    plan: req.auth.plan,
+    crawlerOptions,
+    scrapeOptions: sc.scrapeOptions,
+    internalOptions: sc.internalOptions,
+    origin: "api",
+    crawl_id: id,
+    webhook: req.body.webhook,
+    v1: true,
+  }, {}, crypto.randomUUID(), 10);
   
+  const protocol = process.env.ENV === "local" ? req.protocol : "https";
+
   return res.status(200).json({
     success: true,
     id,
     url: `${protocol}://${req.get("host")}/v1/crawl/${id}`,
   });
 }
-
-
