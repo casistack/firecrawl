@@ -66,6 +66,7 @@ services:
       - SELF_HOSTED_WEBHOOK_URL=${SELF_HOSTED_WEBHOOK_URL}
       - LOGGING_LEVEL=${LOGGING_LEVEL:-info}
       - FIRECRAWL_API_KEY=${FIRECRAWL_API_KEY}
+      - FLY_PROCESS_GROUP=worker
     command: [ "pnpm", "run", "workers" ]
     depends_on:
       - redis
