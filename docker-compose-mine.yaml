@@ -4,7 +4,7 @@ services:
   api:
     build:
       context: ./apps/api
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile-mine
     ports:
       - "3002"
     environment:
