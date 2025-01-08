@@ -7,6 +7,9 @@ import { generateOpenAICompletions } from "../../scraper/scrapeURL/transformers/
 import { buildDocument } from "./build-document";
 import { billTeam } from "../../services/billing/credit_billing";
 import { logJob } from "../../services/logging/log_job";
+import { _addScrapeJobToBullMQ } from "../../services/queue-jobs";
+import { saveCrawl, StoredCrawl } from "../crawl-redis";
+import { updateExtract } from "./extract-redis";
 
 interface ExtractServiceOptions {
   request: ExtractRequest;
@@ -18,15 +21,26 @@ interface ExtractServiceOptions {
 interface ExtractResult {
   success: boolean;
   data?: any;
-  scrapeId: string;
+  extractId: string;
   warning?: string;
   urlTrace?: URLTrace[];
   error?: string;
 }
 
-export async function performExtraction(options: ExtractServiceOptions): Promise<ExtractResult> {
+function getRootDomain(url: string): string {
+  try {
+    if(url.endsWith("/*")) {
+      url = url.slice(0, -2);
+    }
+    const urlObj = new URL(url);
+    return `${urlObj.protocol}//${urlObj.hostname}`;
+  } catch (e) {
+    return url;
+  }
+}
+
+export async function performExtraction(extractId: string, options: ExtractServiceOptions): Promise<ExtractResult> {
   const { request, teamId, plan, subId } = options;
-  const scrapeId = crypto.randomUUID();
   const urlTraces: URLTrace[] = [];
   let docs: Document[] = [];
 
@@ -51,7 +65,7 @@ export async function performExtraction(options: ExtractServiceOptions): Promise
     return {
       success: false,
       error: "No valid URLs found to scrape. Try adjusting your search criteria or including more URLs.",
-      scrapeId,
+      extractId,
       urlTrace: urlTraces,
     };
   }
@@ -75,7 +89,7 @@ export async function performExtraction(options: ExtractServiceOptions): Promise
     return {
       success: false,
       error: error.message,
-      scrapeId,
+      extractId,
       urlTrace: urlTraces,
     };
   }
@@ -87,7 +101,7 @@ export async function performExtraction(options: ExtractServiceOptions): Promise
       mode: "llm",
       systemPrompt:
         (request.systemPrompt ? `${request.systemPrompt}\n` : "") +
-        "Always prioritize using the provided content to answer the question. Do not make up an answer. Be concise and follow the schema always if provided. Here are the urls the user provided of which he wants to extract information from: " +
+        "Always prioritize using the provided content to answer the question. Do not make up an answer. Do not hallucinate. Be concise and follow the schema always if provided. Here are the urls the user provided of which he wants to extract information from: " +
         links.join(", "),
       prompt: request.prompt,
       schema: request.schema,
@@ -112,6 +126,62 @@ export async function performExtraction(options: ExtractServiceOptions): Promise
     });
   }
 
+  // Kickoff background crawl for indexing root domains
+  // const rootDomains = new Set(request.urls.map(getRootDomain));
+  // rootDomains.forEach(async url => {
+  //   const crawlId = crypto.randomUUID();
+    
+  //   // Create and save crawl configuration first
+  //   const sc: StoredCrawl = {
+  //     originUrl: url,
+  //     crawlerOptions: {
+  //       maxDepth: 15,
+  //       limit: 5000,
+  //       includePaths: [],
+  //       excludePaths: [],
+  //       ignoreSitemap: false,
+  //       includeSubdomains: true,
+  //       allowExternalLinks: false,
+  //       allowBackwardLinks: true
+  //     },
+  //     scrapeOptions: {
+  //         formats: ["markdown"],
+  //         onlyMainContent: true,
+  //         waitFor: 0,
+  //         mobile: false,
+  //         removeBase64Images: true,
+  //         fastMode: false,
+  //         parsePDF: true,
+  //         skipTlsVerification: false,
+  //     },
+  //     internalOptions: { 
+  //       disableSmartWaitCache: true,
+  //       isBackgroundIndex: true
+  //     },
+  //     team_id: process.env.BACKGROUND_INDEX_TEAM_ID!,
+  //     createdAt: Date.now(),
+  //     plan: "hobby", // make it a low concurrency
+  //   };
+
+  //   // Save the crawl configuration
+  //   await saveCrawl(crawlId, sc);
+
+  //   // Then kick off the job
+  //   await _addScrapeJobToBullMQ({
+  //     url,
+  //     mode: "kickoff" as const,
+  //     team_id: process.env.BACKGROUND_INDEX_TEAM_ID!,
+  //     plan: "hobby", // make it a low concurrency
+  //     crawlerOptions: sc.crawlerOptions,
+  //     scrapeOptions: sc.scrapeOptions,
+  //     internalOptions: sc.internalOptions,
+  //     origin: "index",
+  //     crawl_id: crawlId,
+  //     webhook: null,
+  //     v1: true,
+  //   }, {}, crypto.randomUUID(), 50);
+  // });
+
   // Bill team for usage
   billTeam(teamId, subId, links.length * 5).catch((error) => {
     logger.error(
@@ -121,7 +191,7 @@ export async function performExtraction(options: ExtractServiceOptions): Promise
 
   // Log job
   logJob({
-    job_id: scrapeId,
+    job_id: extractId,
     success: true,
     message: "Extract completed",
     num_docs: 1,
@@ -133,12 +203,20 @@ export async function performExtraction(options: ExtractServiceOptions): Promise
     scrapeOptions: request,
     origin: request.origin ?? "api",
     num_tokens: completions.numTokens ?? 0,
+  }).then(() => {
+    updateExtract(extractId, {
+      status: "completed",
+    }).catch((error) => {
+      logger.error(`Failed to update extract ${extractId} status to completed: ${error}`);
+    });
   });
+
+
 
   return {
     success: true,
     data: completions.extract ?? {},
-    scrapeId,
+    extractId,
     warning: completions.warning,
     urlTrace: request.urlTrace ? urlTraces : undefined,
   };
