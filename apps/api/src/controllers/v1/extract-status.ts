@@ -31,10 +31,11 @@ export async function extractStatusController(
   }
 
   return res.status(200).json({
-    success: true,
+    success: extract.status === "failed" ? false : true,
     data: data,
     status: extract.status,
     error: extract?.error ?? undefined,
     expiresAt: (await getExtractExpiry(req.params.jobId)).toISOString(),
+    steps: extract.showSteps ? extract.steps : undefined,
   });
 }

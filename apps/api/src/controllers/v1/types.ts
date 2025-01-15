@@ -181,6 +181,7 @@ export const scrapeOptions = z
     skipTlsVerification: z.boolean().default(false),
     removeBase64Images: z.boolean().default(true),
     fastMode: z.boolean().default(false),
+    useMock: z.string().optional(),
   })
   .strict(strictMessage);
 
@@ -200,23 +201,27 @@ export const extractV1Options = z
     schema: z
       .any()
       .optional()
-      .refine((val) => {
-        if (!val) return true; // Allow undefined schema
-        try {
-          const validate = ajv.compile(val);
-          return typeof validate === "function";
-        } catch (e) {
-          return false;
-        }
-      }, {
-        message: "Invalid JSON schema.",
-      }),
+      .refine(
+        (val) => {
+          if (!val) return true; // Allow undefined schema
+          try {
+            const validate = ajv.compile(val);
+            return typeof validate === "function";
+          } catch (e) {
+            return false;
+          }
+        },
+        {
+          message: "Invalid JSON schema.",
+        },
+      ),
     limit: z.number().int().positive().finite().safe().optional(),
     ignoreSitemap: z.boolean().default(false),
     includeSubdomains: z.boolean().default(true),
     allowExternalLinks: z.boolean().default(false),
     origin: z.string().optional().default("api"),
     urlTrace: z.boolean().default(false),
+    __experimental_streamSteps: z.boolean().default(false),
     timeout: z.number().int().positive().finite().safe().default(60000),
   })
   .strict(strictMessage);
@@ -443,6 +448,7 @@ export type Document = {
     url?: string;
     sourceURL?: string;
     statusCode: number;
+    scrapeId?: string;
     error?: string;
     [key: string]: string | string[] | number | undefined;
   };
@@ -451,7 +457,7 @@ export type Document = {
     description: string;
     url: string;
   };
-}
+};
 
 export type ErrorResponse = {
   success: false;
@@ -476,7 +482,7 @@ export interface ScrapeResponseRequestTest {
 
 export interface URLTrace {
   url: string;
-  status: 'mapped' | 'scraped' | 'error';
+  status: "mapped" | "scraped" | "error";
   timing: {
     discoveredAt: string;
     scrapedAt?: string;
@@ -784,28 +790,46 @@ export function toLegacyDocument(
   };
 }
 
-export const searchRequestSchema = z.object({
-  query: z.string(),
-  limit: z.number().int().positive().finite().safe().max(10).optional().default(5),
-  tbs: z.string().optional(),
-  filter: z.string().optional(),
-  lang: z.string().optional().default("en"),
-  country: z.string().optional().default("us"),
-  location: z.string().optional(),
-  origin: z.string().optional().default("api"),
-  timeout: z.number().int().positive().finite().safe().default(60000),
-  scrapeOptions: scrapeOptions.extend({
-    formats: z.array(z.enum([
-      "markdown",
-      "html", 
-      "rawHtml",
-      "links",
-      "screenshot",
-      "screenshot@fullPage",
-      "extract"
-    ])).default([])
-  }).default({}),
-}).strict("Unrecognized key in body -- please review the v1 API documentation for request body changes");
+export const searchRequestSchema = z
+  .object({
+    query: z.string(),
+    limit: z
+      .number()
+      .int()
+      .positive()
+      .finite()
+      .safe()
+      .max(10)
+      .optional()
+      .default(5),
+    tbs: z.string().optional(),
+    filter: z.string().optional(),
+    lang: z.string().optional().default("en"),
+    country: z.string().optional().default("us"),
+    location: z.string().optional(),
+    origin: z.string().optional().default("api"),
+    timeout: z.number().int().positive().finite().safe().default(60000),
+    scrapeOptions: scrapeOptions
+      .extend({
+        formats: z
+          .array(
+            z.enum([
+              "markdown",
+              "html",
+              "rawHtml",
+              "links",
+              "screenshot",
+              "screenshot@fullPage",
+              "extract",
+            ]),
+          )
+          .default([]),
+      })
+      .default({}),
+  })
+  .strict(
+    "Unrecognized key in body -- please review the v1 API documentation for request body changes",
+  );
 
 export type SearchRequest = z.infer<typeof searchRequestSchema>;
 
