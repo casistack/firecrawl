@@ -2,7 +2,7 @@ import axios, { AxiosError } from "axios";
 import cheerio, { load } from "cheerio";
 import { URL } from "url";
 import { getLinksFromSitemap } from "./sitemap";
-import robotsParser from "robots-parser";
+import robotsParser, { Robot } from "robots-parser";
 import { getURLDepth } from "./utils/maxDepthUtils";
 import { axiosTimeout } from "../../lib/timeout";
 import { logger as _logger } from "../../lib/logger";
@@ -20,7 +20,7 @@ export class WebCrawler {
   private crawledUrls: Map<string, string> = new Map();
   private limit: number;
   private robotsTxtUrl: string;
-  public robots: any;
+  public robots: Robot;
   private generateImgAltText: boolean;
   private allowBackwardCrawling: boolean;
   private allowExternalContentLinks: boolean;
@@ -63,7 +63,7 @@ export class WebCrawler {
     this.includes = Array.isArray(includes) ? includes : [];
     this.excludes = Array.isArray(excludes) ? excludes : [];
     this.limit = limit;
-    this.robotsTxtUrl = `${this.baseUrl}/robots.txt`;
+    this.robotsTxtUrl = `${this.baseUrl}${this.baseUrl.endsWith("/") ? "" : "/"}robots.txt`;
     this.robots = robotsParser(this.robotsTxtUrl, "");
     // Deprecated, use limit instead
     this.maxCrawledLinks = maxCrawledLinks ?? limit;
@@ -202,6 +202,7 @@ export class WebCrawler {
     urlsHandler: (urls: string[]) => unknown,
     fromMap: boolean = false,
     onlySitemap: boolean = false,
+    timeout: number = 120000,
   ): Promise<number> {
     this.logger.debug(`Fetching sitemap links from ${this.initialUrl}`, {
       method: "tryGetSitemap",
@@ -217,59 +218,82 @@ export class WebCrawler {
     };
 
     const _urlsHandler = async (urls: string[]) => {
-      let uniqueURLs: string[] = [];
-      for (const url of urls) {
-        if (
-          await redisConnection.sadd(
-            "sitemap:" + this.jobId + ":links",
-            normalizeUrl(url),
-          )
-        ) {
-          uniqueURLs.push(url);
+      if (fromMap && onlySitemap) {
+        return urlsHandler(urls);
+      } else {
+        let filteredLinks = this.filterLinks(
+          [...new Set(urls)],
+          leftOfLimit,
+          this.maxCrawledDepth,
+          fromMap,
+        );
+        leftOfLimit -= filteredLinks.length;
+        let uniqueURLs: string[] = [];
+        for (const url of filteredLinks) {
+          if (
+            await redisConnection.sadd(
+              "sitemap:" + this.jobId + ":links",
+              normalizeUrl(url),
+            )
+          ) {
+            uniqueURLs.push(url);
+          }
         }
-      }
 
-      await redisConnection.expire(
-        "sitemap:" + this.jobId + ":links",
-        3600,
-        "NX",
-      );
-      if (uniqueURLs.length > 0) {
-        urlsHandler(uniqueURLs);
+        await redisConnection.expire(
+          "sitemap:" + this.jobId + ":links",
+          3600,
+          "NX",
+        );
+        if (uniqueURLs.length > 0) {
+          return urlsHandler(uniqueURLs);
+        }
       }
     };
 
-    let count = await this.tryFetchSitemapLinks(
-      this.initialUrl,
-      (urls: string[]) => {
-        if (fromMap && onlySitemap) {
-          return urlsHandler(urls);
-        } else {
-          let filteredLinks = this.filterLinks(
-            [...new Set(urls)],
-            leftOfLimit,
-            this.maxCrawledDepth,
-            fromMap,
-          );
-          leftOfLimit -= filteredLinks.length;
-          return _urlsHandler(filteredLinks);
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('Sitemap fetch timeout')), timeout);
+    });
+
+    try {
+      let count = await Promise.race([
+        Promise.all([
+          this.tryFetchSitemapLinks(
+            this.initialUrl,
+            _urlsHandler,
+          ),
+          ...this.robots.getSitemaps().map(x => this.tryFetchSitemapLinks(x, _urlsHandler)),
+        ]).then(results => results.reduce((a,x) => a+x, 0)),
+        timeoutPromise
+      ]) as number;
+
+      if (count > 0) {
+        if (
+          await redisConnection.sadd(
+            "sitemap:" + this.jobId + ":links",
+            normalizeUrl(this.initialUrl),
+          )
+        ) {
+          urlsHandler([this.initialUrl]);
         }
-      },
-    );
-
-    if (count > 0) {
-      if (
-        await redisConnection.sadd(
-          "sitemap:" + this.jobId + ":links",
-          normalizeUrl(this.initialUrl),
-        )
-      ) {
-        urlsHandler([this.initialUrl]);
+        count++;
       }
-      count++;
-    }
 
-    return count;
+      return count;
+    } catch (error) {
+      if (error.message === 'Sitemap fetch timeout') {
+        this.logger.warn('Sitemap fetch timed out', {
+          method: "tryGetSitemap",
+          timeout,
+        });
+        return 0;
+      }
+      this.logger.error('Error fetching sitemap', {
+        method: "tryGetSitemap",
+        error,
+      });
+      return 0;
+    }
   }
 
   public filterURL(href: string, url: string): string | null {
@@ -298,6 +322,16 @@ export class WebCrawler {
         this.isRobotsAllowed(fullUrl, this.ignoreRobotsTxt)
       ) {
         return fullUrl;
+      } else if (
+        this.isInternalLink(fullUrl) &&
+        this.noSections(fullUrl) &&
+        !this.matchesExcludes(path) &&
+        !this.isRobotsAllowed(fullUrl, this.ignoreRobotsTxt)
+      ) {
+        (async() => {
+          await redisConnection.sadd("crawl:" + this.jobId + ":robots_blocked", fullUrl);
+          await redisConnection.expire("crawl:" + this.jobId + ":robots_blocked", 24 * 60 * 60, "NX");
+        })();
       }
     } else {
       // EXTERNAL LINKS

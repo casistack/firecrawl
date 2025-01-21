@@ -28,6 +28,7 @@ import { extractStatusController } from "../controllers/v1/extract-status";
 import { creditUsageController } from "../controllers/v1/credit-usage";
 import { BLOCKLISTED_URL_MESSAGE } from "../lib/strings";
 import { searchController } from "../controllers/v1/search";
+import { crawlErrorsController } from "../controllers/v1/crawl-errors";
 
 function checkCreditsMiddleware(
   minimum?: number,
@@ -193,6 +194,18 @@ v1Router.get(
 );
 
 v1Router.get(
+  "/crawl/:jobId/errors",
+  authMiddleware(RateLimiterMode.CrawlStatus),
+  wrap(crawlErrorsController),
+);
+
+v1Router.get(
+  "/batch/scrape/:jobId/errors",
+  authMiddleware(RateLimiterMode.CrawlStatus),
+  wrap(crawlErrorsController),
+);
+
+v1Router.get(
   "/scrape/:jobId",
   authMiddleware(RateLimiterMode.CrawlStatus),
   wrap(scrapeStatusController),
@@ -215,7 +228,7 @@ v1Router.post(
 
 v1Router.get(
   "/extract/:jobId",
-  authMiddleware(RateLimiterMode.CrawlStatus),
+  authMiddleware(RateLimiterMode.ExtractStatus),
   wrap(extractStatusController),
 );
 

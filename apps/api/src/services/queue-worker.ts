@@ -8,6 +8,7 @@ import {
   redisConnection,
   scrapeQueueName,
   extractQueueName,
+  getIndexQueue,
 } from "./queue-service";
 import { startWebScraperPipeline } from "../main/runWebScraper";
 import { callWebhook } from "./webhook";
@@ -23,6 +24,7 @@ import {
   addCrawlJobs,
   crawlToCrawler,
   finishCrawl,
+  finishCrawlKickoff,
   generateURLPermutations,
   getCrawl,
   getCrawlJobCount,
@@ -60,6 +62,7 @@ import { supabase_service } from "../services/supabase";
 import { normalizeUrl, normalizeUrlOnlyHostname } from "../lib/canonical-url";
 import { saveExtract, updateExtract } from "../lib/extract/extract-redis";
 import { billTeam } from "./billing/credit_billing";
+import { saveCrawlMap } from "./indexing/crawl-maps-index";
 
 configDotenv();
 
@@ -101,58 +104,17 @@ async function finishCrawlIfNeeded(job: Job & { id: string }, sc: StoredCrawl) {
         job.data.crawlerOptions !== null &&
         originUrl
       ) {
-        // Fire and forget the upload to Supabase
-        try {
-          // Standardize URLs to canonical form (https, no www)
-          const standardizedUrls = [
-            ...new Set(
-              visitedUrls.map((url) => {
-                return normalizeUrl(url);
-              }),
-            ),
-          ];
-          // First check if entry exists for this origin URL
-          const { data: existingMap } = await supabase_service
-            .from("crawl_maps")
-            .select("urls")
-            .eq("origin_url", originUrl)
-            .single();
-
-          if (existingMap) {
-            // Merge URLs, removing duplicates
-            const mergedUrls = [
-              ...new Set([...existingMap.urls, ...standardizedUrls]),
-            ];
-
-            const { error } = await supabase_service
-              .from("crawl_maps")
-              .update({
-                urls: mergedUrls,
-                num_urls: mergedUrls.length,
-                updated_at: new Date().toISOString(),
-              })
-              .eq("origin_url", originUrl);
-
-            if (error) {
-              _logger.error("Failed to update crawl map", { error });
-            }
-          } else {
-            // Insert new entry if none exists
-            const { error } = await supabase_service.from("crawl_maps").insert({
-              origin_url: originUrl,
-              urls: standardizedUrls,
-              num_urls: standardizedUrls.length,
-              created_at: new Date().toISOString(),
-              updated_at: new Date().toISOString(),
-            });
-
-            if (error) {
-              _logger.error("Failed to save crawl map", { error });
-            }
+        // Queue the indexing job instead of doing it directly
+        await getIndexQueue().add(
+          job.data.crawl_id,
+          {
+            originUrl,
+            visitedUrls,
+          },
+          {
+            priority: 10,
           }
-        } catch (error) {
-          _logger.error("Error saving crawl map", { error });
-        }
+        );
       }
     })();
 
@@ -675,9 +637,17 @@ async function processKickoffJob(job: Job & { id: string }, token: string) {
 
     logger.debug("Done queueing jobs!");
 
+    await finishCrawlKickoff(job.data.crawl_id);
+    await finishCrawlIfNeeded(job, sc);
+
     return { success: true };
   } catch (error) {
     logger.error("An error occurred!", { error });
+    await finishCrawlKickoff(job.data.crawl_id);
+    const sc = (await getCrawl(job.data.crawl_id)) as StoredCrawl;
+    if (sc) {
+      await finishCrawlIfNeeded(job, sc);
+    }
     return { success: false, error };
   }
 }
@@ -711,6 +681,7 @@ async function processJob(job: Job & { id: string }, token: string) {
     teamId: job.data?.team_id ?? undefined,
   });
   logger.info(`🐂 Worker taking job ${job.id}`, { url: job.data.url });
+  const start = Date.now();
 
   // Check if the job URL is researchhub and block it immediately
   // TODO: remove this once solve the root issue
@@ -737,7 +708,6 @@ async function processJob(job: Job & { id: string }, token: string) {
       current_step: "SCRAPING",
       current_url: "",
     });
-    const start = Date.now();
 
     if (job.data.crawl_id) {
       const sc = (await getCrawl(job.data.crawl_id)) as StoredCrawl;
@@ -988,6 +958,19 @@ async function processJob(job: Job & { id: string }, token: string) {
     logger.info(`🐂 Job done ${job.id}`);
     return data;
   } catch (error) {
+    if (job.data.crawl_id) {
+      const sc = (await getCrawl(job.data.crawl_id)) as StoredCrawl;
+
+      logger.debug("Declaring job as done...");
+      await addCrawlJobDone(job.data.crawl_id, job.id, false);
+      await redisConnection.srem(
+        "crawl:" + job.data.crawl_id + ":visited_unique",
+        normalizeURL(job.data.url, sc),
+      );
+
+      await finishCrawlIfNeeded(job, sc);
+    }
+    
     const isEarlyTimeout =
       error instanceof Error && error.message === "timeout";
     const isCancelled =
@@ -1041,6 +1024,9 @@ async function processJob(job: Job & { id: string }, token: string) {
       );
     }
 
+    const end = Date.now();
+    const timeTakenInSeconds = (end - start) / 1000;
+
     logger.debug("Logging job to DB...");
     await logJob(
       {
@@ -1053,7 +1039,7 @@ async function processJob(job: Job & { id: string }, token: string) {
               "Something went wrong... Contact help@mendable.ai"),
         num_docs: 0,
         docs: [],
-        time_taken: 0,
+        time_taken: timeTakenInSeconds,
         team_id: job.data.team_id,
         mode: job.data.mode,
         url: job.data.url,
@@ -1064,39 +1050,6 @@ async function processJob(job: Job & { id: string }, token: string) {
       },
       true,
     );
-
-    if (job.data.crawl_id) {
-      const sc = (await getCrawl(job.data.crawl_id)) as StoredCrawl;
-
-      logger.debug("Declaring job as done...");
-      await addCrawlJobDone(job.data.crawl_id, job.id, false);
-      await redisConnection.srem(
-        "crawl:" + job.data.crawl_id + ":visited_unique",
-        normalizeURL(job.data.url, sc),
-      );
-
-      await finishCrawlIfNeeded(job, sc);
-
-      // await logJob({
-      //   job_id: job.data.crawl_id,
-      //   success: false,
-      //   message:
-      //     typeof error === "string"
-      //       ? error
-      //       : error.message ??
-      //         "Something went wrong... Contact help@mendable.ai",
-      //   num_docs: 0,
-      //   docs: [],
-      //   time_taken: 0,
-      //   team_id: job.data.team_id,
-      //   mode: job.data.crawlerOptions !== null ? "crawl" : "batch_scrape",
-      //   url: sc ? sc.originUrl ?? job.data.url : job.data.url,
-      //   crawlerOptions: sc ? sc.crawlerOptions : undefined,
-      //   scrapeOptions: sc ? sc.scrapeOptions : job.data.scrapeOptions,
-      //   origin: job.data.origin,
-      // });
-    }
-    // done(null, data);
     return data;
   }
 }
@@ -1126,5 +1079,6 @@ async function processJob(job: Job & { id: string }, token: string) {
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
 
+  console.log("All jobs finished. Worker out!");
   process.exit(0);
 })();

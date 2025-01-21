@@ -87,6 +87,7 @@ export interface FirecrawlJob {
   num_tokens?: number;
   retry?: boolean;
   crawl_id?: string;
+  tokens_billed?: number;
 }
 
 export interface FirecrawlScrapeResponse {
@@ -133,6 +134,7 @@ export enum RateLimiterMode {
   Search = "search",
   Map = "map",
   Extract = "extract",
+  ExtractStatus = "extractStatus",
 }
 
 export type AuthResponse =
@@ -184,6 +186,9 @@ export type PlanType =
   | "etier1a"
   | "etierscale1"
   | "free"
+  | "extract_starter"
+  | "extract_explorer"
+  | "extract_pro"
   | "";
 
 export type WebhookEventType =

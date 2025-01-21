@@ -12,6 +12,7 @@ import { autoCharge } from "./auto_charge";
 import { getValue, setValue } from "../redis";
 import type { Logger } from "winston";
 
+// Deprecated, done via rpc
 const FREE_CREDITS = 500;
 
 /**
@@ -22,12 +23,14 @@ export async function billTeam(
   subscription_id: string | null | undefined,
   credits: number,
   logger?: Logger,
+  is_extract: boolean = false,
 ) {
   return withAuth(supaBillTeam, { success: true, message: "No DB, bypassed." })(
     team_id,
     subscription_id,
     credits,
     logger,
+    is_extract,
   );
 }
 export async function supaBillTeam(
@@ -35,25 +38,27 @@ export async function supaBillTeam(
   subscription_id: string | null | undefined,
   credits: number,
   __logger?: Logger,
+  is_extract: boolean = false,
 ) {
   const _logger = (__logger ?? logger).child({
     module: "credit_billing",
     method: "supaBillTeam",
+    teamId: team_id,
+    subscriptionId: subscription_id,
+    credits,
   });
 
   if (team_id === "preview") {
     return { success: true, message: "Preview team, no credits used" };
   }
-  _logger.info(`Billing team ${team_id} for ${credits} credits`, {
-    team_id,
-    credits,
-  });
+  _logger.info(`Billing team ${team_id} for ${credits} credits`);
 
-  const { data, error } = await supabase_service.rpc("bill_team", {
+  const { data, error } = await supabase_service.rpc("bill_team_w_extract_3", {
     _team_id: team_id,
     sub_id: subscription_id ?? null,
     fetch_subscription: subscription_id === undefined,
     credits,
+    is_extract_param: is_extract,
   });
 
   if (error) {

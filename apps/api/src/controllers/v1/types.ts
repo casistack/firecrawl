@@ -34,7 +34,7 @@ export const url = z.preprocess(
     .url()
     .regex(/^https?:\/\//, "URL uses unsupported protocol")
     .refine(
-      (x) => /\.[a-z]{2,}([\/?#]|$)/i.test(x),
+      (x) => /\.[a-z]{2,}(:\d+)?([\/?#]|$)/i.test(x),
       "URL must have a valid top-level domain or be a valid path",
     )
     .refine((x) => {
@@ -125,6 +125,7 @@ export const scrapeOptions = z
         "screenshot",
         "screenshot@fullPage",
         "extract",
+        "json"
       ])
       .array()
       .optional()
@@ -139,7 +140,10 @@ export const scrapeOptions = z
     onlyMainContent: z.boolean().default(true),
     timeout: z.number().int().positive().finite().safe().optional(),
     waitFor: z.number().int().nonnegative().finite().safe().default(0),
+    // Deprecate this to jsonOptions
     extract: extractOptions.optional(),
+    // New
+    jsonOptions: extractOptions.optional(),
     mobile: z.boolean().default(false),
     parsePDF: z.boolean().default(true),
     actions: actionsSchema.optional(),
@@ -219,12 +223,18 @@ export const extractV1Options = z
     ignoreSitemap: z.boolean().default(false),
     includeSubdomains: z.boolean().default(true),
     allowExternalLinks: z.boolean().default(false),
+    enableWebSearch: z.boolean().default(false),
     origin: z.string().optional().default("api"),
     urlTrace: z.boolean().default(false),
     __experimental_streamSteps: z.boolean().default(false),
+    __experimental_llmUsage: z.boolean().default(false),
     timeout: z.number().int().positive().finite().safe().default(60000),
   })
-  .strict(strictMessage);
+  .strict(strictMessage)
+  .transform((obj) => ({
+    ...obj,
+    allowExternalLinks: obj.allowExternalLinks || obj.enableWebSearch
+  }));
 
 export type ExtractV1Options = z.infer<typeof extractV1Options>;
 export const extractRequestSchema = extractV1Options;
@@ -242,20 +252,43 @@ export const scrapeRequestSchema = scrapeOptions
     (obj) => {
       const hasExtractFormat = obj.formats?.includes("extract");
       const hasExtractOptions = obj.extract !== undefined;
+      const hasJsonFormat = obj.formats?.includes("json");
+      const hasJsonOptions = obj.jsonOptions !== undefined;
       return (
         (hasExtractFormat && hasExtractOptions) ||
-        (!hasExtractFormat && !hasExtractOptions)
+        (!hasExtractFormat && !hasExtractOptions) ||
+        (hasJsonFormat && hasJsonOptions) ||
+        (!hasJsonFormat && !hasJsonOptions)
       );
     },
     {
       message:
-        "When 'extract' format is specified, 'extract' options must be provided, and vice versa",
+        "When 'extract' or 'json' format is specified, corresponding options must be provided, and vice versa",
     },
   )
   .transform((obj) => {
-    if ((obj.formats?.includes("extract") || obj.extract) && !obj.timeout) {
-      return { ...obj, timeout: 60000 };
+    // Handle timeout
+    if ((obj.formats?.includes("extract") || obj.extract || obj.formats?.includes("json") || obj.jsonOptions) && !obj.timeout) {
+      obj = { ...obj, timeout: 60000 };
     }
+
+    if(obj.formats?.includes("json")) {
+      obj.formats.push("extract");
+    }
+
+    // Convert JSON options to extract options if needed
+    if (obj.jsonOptions && !obj.extract) {
+      obj = {
+        ...obj,
+        extract: {
+          prompt: obj.jsonOptions.prompt,
+          systemPrompt: obj.jsonOptions.systemPrompt,
+          schema: obj.jsonOptions.schema,
+          mode: "llm"
+        }
+      };
+    }
+
     return obj;
   });
 
@@ -410,6 +443,7 @@ export type Document = {
   links?: string[];
   screenshot?: string;
   extract?: any;
+  json?: any;
   warning?: string;
   actions?: {
     screenshots?: string[];
@@ -566,6 +600,19 @@ export type CrawlStatusResponse =
       expiresAt: string;
       next?: string;
       data: Document[];
+    };
+
+
+export type CrawlErrorsResponse =
+  | ErrorResponse
+  | {
+      errors: {
+        id: string,
+        timestamp?: string,
+        url: string,
+        error: string,
+      }[];
+      robotsBlocked: string[];
     };
 
 type AuthObject = {
@@ -840,3 +887,12 @@ export type SearchResponse =
       warning?: string;
       data: Document[];
     };
+
+
+export type TokenUsage = {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  step?: string;
+  model?: string;
+};

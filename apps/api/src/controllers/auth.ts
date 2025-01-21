@@ -77,8 +77,9 @@ export async function getACUC(
   api_key: string,
   cacheOnly = false,
   useCache = true,
+  mode?: RateLimiterMode,
 ): Promise<AuthCreditUsageChunk | null> {
-  const cacheKeyACUC = `acuc_${api_key}`;
+  const cacheKeyACUC = `acuc_${api_key}_${mode}`;
 
   if (useCache) {
     const cachedACUC = await getValue(cacheKeyACUC);
@@ -93,12 +94,17 @@ export async function getACUC(
     let retries = 0;
     const maxRetries = 5;
 
+    let rpcName =
+      mode === RateLimiterMode.Extract || mode === RateLimiterMode.ExtractStatus
+        ? "auth_credit_usage_chunk_extract"
+        : "auth_credit_usage_chunk_test_22_credit_pack_n_extract";
     while (retries < maxRetries) {
       ({ data, error } = await supabase_service.rpc(
-        "auth_credit_usage_chunk_test_21_credit_pack",
+        rpcName,
         { input_key: api_key },
         { get: true },
       ));
+
 
       if (!error) {
         break;
@@ -127,8 +133,6 @@ export async function getACUC(
       setCachedACUC(api_key, chunk);
     }
 
-    // console.log(chunk);
-
     return chunk;
   } else {
     return null;
@@ -136,8 +140,17 @@ export async function getACUC(
 }
 
 export async function clearACUC(api_key: string): Promise<void> {
-  const cacheKeyACUC = `acuc_${api_key}`;
-  await deleteKey(cacheKeyACUC);
+  // Delete cache for all rate limiter modes
+  const modes = Object.values(RateLimiterMode);
+  await Promise.all(
+    modes.map(async (mode) => {
+      const cacheKey = `acuc_${api_key}_${mode}`;
+      await deleteKey(cacheKey);
+    })
+  );
+
+  // Also clear the base cache key
+  await deleteKey(`acuc_${api_key}`);
 }
 
 export async function authenticateUser(
@@ -185,14 +198,17 @@ export async function supaAuthenticateUser(
   let teamId: string | null = null;
   let priceId: string | null = null;
   let chunk: AuthCreditUsageChunk | null = null;
-
+  let plan: PlanType = "free";
   if (token == "this_is_just_a_preview_token") {
     if (mode == RateLimiterMode.CrawlStatus) {
       rateLimiter = getRateLimiter(RateLimiterMode.CrawlStatus, token);
+    } else if (mode == RateLimiterMode.ExtractStatus) {
+      rateLimiter = getRateLimiter(RateLimiterMode.ExtractStatus, token);
     } else {
       rateLimiter = getRateLimiter(RateLimiterMode.Preview, token);
     }
     teamId = "preview";
+    plan = "free";
   } else {
     normalizedApi = parseApi(token);
     if (!normalizedApiIsUuid(normalizedApi)) {
@@ -203,7 +219,7 @@ export async function supaAuthenticateUser(
       };
     }
 
-    chunk = await getACUC(normalizedApi);
+    chunk = await getACUC(normalizedApi, false, true, mode);
 
     if (chunk === null) {
       return {
@@ -216,7 +232,8 @@ export async function supaAuthenticateUser(
     teamId = chunk.team_id;
     priceId = chunk.price_id;
 
-    const plan = getPlanByPriceId(priceId);
+
+    plan = getPlanByPriceId(priceId);
     subscriptionData = {
       team_id: teamId,
       plan,
@@ -257,6 +274,9 @@ export async function supaAuthenticateUser(
           token,
           subscriptionData.plan,
         );
+        break;
+      case RateLimiterMode.ExtractStatus:
+        rateLimiter = getRateLimiter(RateLimiterMode.ExtractStatus, token);
         break;
       case RateLimiterMode.CrawlStatus:
         rateLimiter = getRateLimiter(RateLimiterMode.CrawlStatus, token);
@@ -314,7 +334,7 @@ export async function supaAuthenticateUser(
       mode === RateLimiterMode.Extract ||
       mode === RateLimiterMode.Search)
   ) {
-    return { success: true, team_id: "preview", chunk: null };
+    return { success: true, team_id: "preview", chunk: null, plan: "free" };
     // check the origin of the request and make sure its from firecrawl.dev
     // const origin = req.headers.origin;
     // if (origin && origin.includes("firecrawl.dev")){
@@ -361,6 +381,15 @@ function getPlanByPriceId(price_id: string | null): PlanType {
     case process.env.STRIPE_PRICE_ID_ETIER_SCALE_1_MONTHLY:
     case process.env.STRIPE_PRICE_ID_ETIER_SCALE_1_YEARLY:
       return "etierscale1";
+    case process.env.STRIPE_PRICE_ID_EXTRACT_STARTER_MONTHLY:
+    case process.env.STRIPE_PRICE_ID_EXTRACT_STARTER_YEARLY:
+      return "extract_starter";
+    case process.env.STRIPE_PRICE_ID_EXTRACT_EXPLORER_MONTHLY:
+    case process.env.STRIPE_PRICE_ID_EXTRACT_EXPLORER_YEARLY:
+      return "extract_explorer";
+    case process.env.STRIPE_PRICE_ID_EXTRACT_PRO_MONTHLY:
+    case process.env.STRIPE_PRICE_ID_EXTRACT_PRO_YEARLY:
+      return "extract_pro";
     default:
       return "free";
   }
