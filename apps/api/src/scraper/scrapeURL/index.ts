@@ -143,13 +143,16 @@ async function buildMetaObject(
     logger,
     logs,
     featureFlags: buildFeatureFlags(url, options, internalOptions),
-    mock: options.useMock !== undefined ? await loadMock(options.useMock, _logger) : null,
+    mock:
+      options.useMock !== undefined
+        ? await loadMock(options.useMock, _logger)
+        : null,
   };
 }
 
 export type InternalOptions = {
   priority?: number; // Passed along to fire-engine
-  forceEngine?: Engine;
+  forceEngine?: Engine | Engine[];
   atsv?: boolean; // anti-bot solver, beta
 
   v0CrawlOnlyUrls?: boolean;

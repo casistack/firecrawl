@@ -6,6 +6,9 @@ import { CohereClient } from "cohere-ai";
 import { extractConfig } from "./config";
 import { searchSimilarPages } from "./index/pinecone";
 import { generateOpenAICompletions } from "../../scraper/scrapeURL/transformers/llmExtract";
+import { buildRerankerUserPrompt } from "./build-prompts";
+import { buildRerankerSystemPrompt } from "./build-prompts";
+import { dumpToFile } from "./helpers/dump-to-file";
 
 const cohere = new CohereClient({
   token: process.env.COHERE_API_KEY,
@@ -57,7 +60,7 @@ export async function rerankLinks(
   const linksAndScores = await performRanking(
     mappedLinksRerank,
     mappedLinks.map((l) => l.url),
-    searchQuery
+    searchQuery,
   );
 
   // First try with high threshold
@@ -107,8 +110,11 @@ export async function rerankLinks(
     }
   });
 
-  const rankedLinks = filteredLinks.slice(0, extractConfig.RERANKING.MAX_RANKING_LIMIT_FOR_RELEVANCE);
-  
+  const rankedLinks = filteredLinks.slice(
+    0,
+    extractConfig.RERANKING.MAX_RANKING_LIMIT_FOR_RELEVANCE,
+  );
+
   // Mark URLs that will be used in completion
   rankedLinks.forEach((link) => {
     const trace = urlTraces.find((t) => t.url === link.url);
@@ -118,13 +124,15 @@ export async function rerankLinks(
   });
 
   // Mark URLs that were dropped due to ranking limit
-  filteredLinks.slice(extractConfig.RERANKING.MAX_RANKING_LIMIT_FOR_RELEVANCE).forEach(link => {
-    const trace = urlTraces.find(t => t.url === link.url);
-    if (trace) {
-      trace.warning = "Excluded due to ranking limit";
-      trace.usedInCompletion = false;
-    }
-  });
+  filteredLinks
+    .slice(extractConfig.RERANKING.MAX_RANKING_LIMIT_FOR_RELEVANCE)
+    .forEach((link) => {
+      const trace = urlTraces.find((t) => t.url === link.url);
+      if (trace) {
+        trace.warning = "Excluded due to ranking limit";
+        trace.usedInCompletion = false;
+      }
+    });
 
   // console.log("Reranked links: ", rankedLinks.length);
 
@@ -151,24 +159,27 @@ function filterAndProcessLinks(
 }
 
 export type RerankerResult = {
-  mapDocument: MapDocument[];
+  mapDocument: (MapDocument & { relevanceScore?: number; reason?: string })[];
   tokensUsed: number;
-}
+};
 
-export async function rerankLinksWithLLM(
-  mappedLinks: MapDocument[],
-  searchQuery: string,
-  urlTraces: URLTrace[],
-): Promise<RerankerResult> {
+export type RerankerOptions = {
+  links: MapDocument[];
+  searchQuery: string;
+  urlTraces: URLTrace[];
+};
+
+export async function rerankLinksWithLLM(options: RerankerOptions): Promise<RerankerResult> {
+  const { links, searchQuery, urlTraces } = options;
   const chunkSize = 100;
   const chunks: MapDocument[][] = [];
   const TIMEOUT_MS = 20000;
   const MAX_RETRIES = 2;
   let totalTokensUsed = 0;
-  
-  // Split mappedLinks into chunks of 200
-  for (let i = 0; i < mappedLinks.length; i += chunkSize) {
-    chunks.push(mappedLinks.slice(i, i + chunkSize));
+
+  // Split links into chunks of 200
+  for (let i = 0; i < links.length; i += chunkSize) {
+    chunks.push(links.slice(i, i + chunkSize));
   }
 
   // console.log(`Total links: ${mappedLinks.length}, Number of chunks: ${chunks.length}`);
@@ -182,22 +193,26 @@ export async function rerankLinksWithLLM(
           type: "object",
           properties: {
             url: { type: "string" },
-            relevanceScore: { type: "number" }
+            relevanceScore: { type: "number" },
+            reason: { type: "string", description: "The reason why you chose the score for this link given the intent." },
           },
-          required: ["url", "relevanceScore"]
-        }
-      }
+          required: ["url", "relevanceScore", "reason"],
+        },
+      },
     },
-    required: ["relevantLinks"]
+    required: ["relevantLinks"],
   };
 
   const results = await Promise.all(
     chunks.map(async (chunk, chunkIndex) => {
       // console.log(`Processing chunk ${chunkIndex + 1}/${chunks.length} with ${chunk.length} links`);
-      
-      const linksContent = chunk.map(link => 
-        `URL: ${link.url}${link.title ? `\nTitle: ${link.title}` : ''}${link.description ? `\nDescription: ${link.description}` : ''}`
-      ).join("\n\n");
+
+      const linksContent = chunk
+        .map(
+          (link) =>
+            `URL: ${link.url}${link.title ? `\nTitle: ${link.title}` : ""}${link.description ? `\nDescription: ${link.description}` : ""}`,
+        )
+        .join("\n\n");
 
       for (let retry = 0; retry <= MAX_RETRIES; retry++) {
         try {
@@ -205,21 +220,29 @@ export async function rerankLinksWithLLM(
             setTimeout(() => resolve(null), TIMEOUT_MS);
           });
 
+          // dumpToFile(new Date().toISOString(),[buildRerankerSystemPrompt(), buildRerankerUserPrompt(searchQuery), schema, linksContent])
           const completionPromise = generateOpenAICompletions(
-            logger.child({ method: "rerankLinksWithLLM", chunk: chunkIndex + 1, retry }),
+            logger.child({
+              method: "rerankLinksWithLLM",
+              chunk: chunkIndex + 1,
+              retry,
+            }),
             {
               mode: "llm",
-              systemPrompt: "You are a search relevance expert. Analyze the provided URLs and their content to determine their relevance to the search query. For each URL, assign a relevance score between 0 and 1, where 1 means highly relevant and 0 means not relevant at all. Only include URLs that are actually relevant to the query.",
-              prompt: `Given these URLs and their content, identify which ones are relevant to the search query: "${searchQuery}". Return an array of relevant links with their relevance scores (0-1). Higher scores should be given to URLs that directly address the search query. Be very mindful with the links you select, as if they are not that relevant it may affect the quality of the extraction. Only include URLs that have a relvancy score of 0.6+.`,
-              schema: schema
+              systemPrompt: buildRerankerSystemPrompt(),
+              prompt: buildRerankerUserPrompt(searchQuery),
+              schema: schema,
             },
             linksContent,
             undefined,
             true
           );
 
-          const completion = await Promise.race([completionPromise, timeoutPromise]);
-          
+          const completion = await Promise.race([
+            completionPromise,
+            timeoutPromise,
+          ]);
+
           if (!completion) {
             // console.log(`Chunk ${chunkIndex + 1}: Timeout on attempt ${retry + 1}`);
             continue;
@@ -233,9 +256,11 @@ export async function rerankLinksWithLLM(
           totalTokensUsed += completion.numTokens || 0;
           // console.log(`Chunk ${chunkIndex + 1}: Found ${completion.extract.relevantLinks.length} relevant links`);
           return completion.extract.relevantLinks;
-
         } catch (error) {
-          console.warn(`Error processing chunk ${chunkIndex + 1} attempt ${retry + 1}:`, error);
+          console.warn(
+            `Error processing chunk ${chunkIndex + 1} attempt ${retry + 1}:`,
+            error,
+          );
           if (retry === MAX_RETRIES) {
             // console.log(`Chunk ${chunkIndex + 1}: Max retries reached, returning empty array`);
             return [];
@@ -243,21 +268,28 @@ export async function rerankLinksWithLLM(
         }
       }
       return [];
-    })
+    }),
   );
 
   // console.log(`Processed ${results.length} chunks`);
 
   // Flatten results and sort by relevance score
-  const flattenedResults = results.flat().sort((a, b) => b.relevanceScore - a.relevanceScore);
+  const flattenedResults = results
+    .flat()
+    .sort((a, b) => b.relevanceScore - a.relevanceScore);
   // console.log(`Total relevant links found: ${flattenedResults.length}`);
 
   // Map back to MapDocument format, keeping only relevant links
   const relevantLinks = flattenedResults
-    .map(result => mappedLinks.find(link => link.url === result.url))
-    .filter((link): link is MapDocument => link !== undefined);
+    .map((result) => {
+      const link = links.find((link) => link.url === result.url);
+      if (link) {
+        return { ...link, relevanceScore: result.relevanceScore ? parseFloat(result.relevanceScore) : 0, reason: result.reason };
+      }
+      return undefined;
+    })
+    .filter((link): link is NonNullable<typeof link> => link !== undefined);
 
-  // console.log(`Returning ${relevantLinks.length} relevant links`);
   return {
     mapDocument: relevantLinks,
     tokensUsed: totalTokensUsed,

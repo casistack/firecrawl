@@ -4,11 +4,12 @@ import { PlanType } from "../../types";
 import { removeDuplicateUrls } from "../validateUrl";
 import { isUrlBlocked } from "../../scraper/WebScraper/utils/blocklist";
 import { generateBasicCompletion } from "../LLM-extraction";
-import { buildRefrasedPrompt } from "./build-prompts";
+import { buildPreRerankPrompt, buildRefrasedPrompt } from "./build-prompts";
 import { rerankLinksWithLLM } from "./reranker";
 import { extractConfig } from "./config";
 import { updateExtract } from "./extract-redis";
 import { ExtractStep } from "./extract-redis";
+import type { Logger } from "winston";
 
 interface ProcessUrlOptions {
   url: string;
@@ -26,6 +27,7 @@ export async function processUrl(
   options: ProcessUrlOptions,
   urlTraces: URLTrace[],
   updateExtractCallback: (links: string[]) => void,
+  logger: Logger,
 ): Promise<string[]> {
   const trace: URLTrace = {
     url: options.url,
@@ -41,6 +43,7 @@ export async function processUrl(
       trace.usedInCompletion = true;
       return [options.url];
     }
+    logger.warn("URL is blocked");
     trace.status = "error";
     trace.error = "URL is blocked";
     trace.usedInCompletion = false;
@@ -50,9 +53,9 @@ export async function processUrl(
   const baseUrl = options.url.replace("/*", "");
   let urlWithoutWww = baseUrl.replace("www.", "");
 
-  let rephrasedPrompt = options.prompt;
+  let searchQuery = options.prompt;
   if (options.prompt) {
-    rephrasedPrompt =
+    searchQuery =
       (
         await generateBasicCompletion(
           buildRefrasedPrompt(options.prompt, baseUrl),
@@ -63,9 +66,12 @@ export async function processUrl(
   }
 
   try {
+    logger.debug("Running map...", {
+      search: searchQuery,
+    });
     const mapResults = await getMapResults({
       url: baseUrl,
-      search: rephrasedPrompt,
+      search: searchQuery,
       teamId: options.teamId,
       plan: options.plan,
       allowExternalLinks: options.allowExternalLinks,
@@ -79,6 +85,10 @@ export async function processUrl(
     let mappedLinks = mapResults.mapResults as MapDocument[];
     let allUrls = [...mappedLinks.map((m) => m.url), ...mapResults.links];
     let uniqueUrls = removeDuplicateUrls(allUrls);
+    logger.debug("Map finished.", {
+      linkCount: allUrls.length,
+      uniqueLinkCount: uniqueUrls.length,
+    });
 
     // Track all discovered URLs
     uniqueUrls.forEach((discoveredUrl) => {
@@ -96,6 +106,7 @@ export async function processUrl(
 
     // retry if only one url is returned
     if (uniqueUrls.length <= 1) {
+      logger.debug("Running map... (pass 2)");
       const retryMapResults = await getMapResults({
         url: baseUrl,
         teamId: options.teamId,
@@ -111,6 +122,10 @@ export async function processUrl(
       mappedLinks = retryMapResults.mapResults as MapDocument[];
       allUrls = [...mappedLinks.map((m) => m.url), ...mapResults.links];
       uniqueUrls = removeDuplicateUrls(allUrls);
+      logger.debug("Map finished. (pass 2)", {
+        linkCount: allUrls.length,
+        uniqueLinkCount: uniqueUrls.length,
+      });
 
       // Track all discovered URLs
       uniqueUrls.forEach((discoveredUrl) => {
@@ -160,58 +175,59 @@ export async function processUrl(
       extractConfig.RERANKING.MAX_INITIAL_RANKING_LIMIT,
     );
 
-
     updateExtractCallback(mappedLinks.map((x) => x.url));
 
-
-    // Perform reranking using either prompt or schema
-    let searchQuery = "";
-    if (options.prompt) {
-      searchQuery = options.allowExternalLinks
-        ? `${options.prompt} ${urlWithoutWww}`
-        : `${options.prompt} site:${urlWithoutWww}`;
-    } else if (options.schema) {
-      // Generate search query from schema using basic completion
-      try {
-        const schemaString = JSON.stringify(options.schema, null, 2);
-        const prompt = `Given this JSON schema, generate a natural language search query that would help find relevant pages containing this type of data. Focus on the key properties and their descriptions and keep it very concise. Schema: ${schemaString}`;
-
-        searchQuery =
-          (await generateBasicCompletion(prompt)) ??
-          "Extract the data according to the schema: " + schemaString;
-
-        if (options.allowExternalLinks) {
-          searchQuery = `${searchQuery} ${urlWithoutWww}`;
-        } else {
-          searchQuery = `${searchQuery} site:${urlWithoutWww}`;
-        }
-      } catch (error) {
-        console.error("Error generating search query from schema:", error);
-        searchQuery = urlWithoutWww; // Fallback to just the domain
-      }
-    } else {
-      searchQuery = urlWithoutWww;
+    let rephrasedPrompt = options.prompt ?? searchQuery;
+    try {
+      rephrasedPrompt =
+        (await generateBasicCompletion(
+          buildPreRerankPrompt(rephrasedPrompt, options.schema, baseUrl),
+        )) ??
+        "Extract the data according to the schema: " +
+          JSON.stringify(options.schema, null, 2);
+    } catch (error) {
+      console.error("Error generating search query from schema:", error);
+      rephrasedPrompt =
+        "Extract the data according to the schema: " +
+        JSON.stringify(options.schema, null, 2) +
+        " " +
+        options?.prompt; // Fallback to just the domain
     }
 
-    // dumpToFile(
     //   "mapped-links.txt",
     //   mappedLinks,
     //   (link, index) => `${index + 1}. URL: ${link.url}, Title: ${link.title}, Description: ${link.description}`
     // );
 
-    const rerankerResult = await rerankLinksWithLLM(mappedLinks, searchQuery, urlTraces);
+    logger.info("Generated rephrased prompt.", {
+      rephrasedPrompt,
+    });
+
+    logger.info("Reranking pass 1 (threshold 0.8)...");
+    const rerankerResult = await rerankLinksWithLLM({
+      links: mappedLinks,
+      searchQuery: rephrasedPrompt,
+      urlTraces,
+    });
     mappedLinks = rerankerResult.mapDocument;
     let tokensUsed = rerankerResult.tokensUsed;
+    logger.info("Reranked! (pass 1)", {
+      linkCount: mappedLinks.length,
+    });
 
     // 2nd Pass, useful for when the first pass returns too many links
     if (mappedLinks.length > 100) {
-      const rerankerResult = await rerankLinksWithLLM(
-        mappedLinks,
-        searchQuery,
+      logger.info("Reranking (pass 2)...");
+      const rerankerResult = await rerankLinksWithLLM({
+        links: mappedLinks,
+        searchQuery: rephrasedPrompt,
         urlTraces,
-      );
+      });
       mappedLinks = rerankerResult.mapDocument;
       tokensUsed += rerankerResult.tokensUsed;
+      logger.info("Reranked! (pass 2)", {
+        linkCount: mappedLinks.length,
+      });
     }
 
     // dumpToFile(

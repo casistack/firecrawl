@@ -42,12 +42,15 @@ export async function saveEntryToCache(key: string, entry: CacheEntry) {
   if (!cacheRedis) return;
 
   if (!entry.html || entry.html.length < 100) {
-    logger.warn("Skipping cache save for short HTML", { key, htmlLength: entry.html?.length });
+    logger.warn("Skipping cache save for short HTML", {
+      key,
+      htmlLength: entry.html?.length,
+    });
     return;
   }
 
   try {
-    await cacheRedis.set(key, JSON.stringify(entry), "EX", 3600); // 1 hour in seconds
+    await cacheRedis.set(key, JSON.stringify(entry), "EX", 14400); // 4 hours in seconds
   } catch (error) {
     logger.warn("Failed to save to cache", { key, error });
   }

@@ -1,15 +1,36 @@
-import { getRateLimiterPoints } from "../services/rate-limiter";
+import { CONCURRENCY_LIMIT } from "../services/rate-limiter";
 import { redisConnection } from "../services/queue-service";
-import { RateLimiterMode } from "../types";
-import { JobsOptions } from "bullmq";
+import { PlanType } from "../types";
+import type { Job, JobsOptions } from "bullmq";
 
 const constructKey = (team_id: string) => "concurrency-limiter:" + team_id;
 const constructQueueKey = (team_id: string) =>
   "concurrency-limit-queue:" + team_id;
-const stalledJobTimeoutMs = 2 * 60 * 1000;
 
-export function getConcurrencyLimitMax(plan: string): number {
-  return getRateLimiterPoints(RateLimiterMode.Scrape, undefined, plan);
+export function calculateJobTimeToRun(
+  job: ConcurrencyLimitedJob
+): number {
+  let jobTimeToRun = 86400000; // 24h (crawl)
+
+  if (job.data.scrapeOptions) {
+    if (job.data.scrapeOptions.timeout) { 
+      jobTimeToRun = job.data.scrapeOptions.timeout;
+    }
+
+    if (job.data.scrapeOptions.waitFor) {
+      jobTimeToRun += job.data.scrapeOptions.waitFor;
+    }
+
+    (job.data.scrapeOptions.actions ?? []).forEach(x => {
+      if (x.type === "wait" && x.milliseconds) {
+        jobTimeToRun += x.milliseconds;
+      } else {
+        jobTimeToRun += 1000;
+      }
+    })
+  }
+
+  return jobTimeToRun;
 }
 
 export async function cleanOldConcurrencyLimitEntries(
@@ -33,11 +54,12 @@ export async function getConcurrencyLimitActiveJobs(
 export async function pushConcurrencyLimitActiveJob(
   team_id: string,
   id: string,
+  timeout: number,
   now: number = Date.now(),
 ) {
   await redisConnection.zadd(
     constructKey(team_id),
-    now + stalledJobTimeoutMs,
+    now + timeout,
     id,
   );
 }
@@ -76,4 +98,10 @@ export async function pushConcurrencyLimitedJob(
     job.priority ?? 1,
     JSON.stringify(job),
   );
+}
+
+
+export async function getConcurrencyQueueJobsCount(team_id: string): Promise<number> {
+  const count = await redisConnection.zcard(constructQueueKey(team_id));
+  return count;
 }

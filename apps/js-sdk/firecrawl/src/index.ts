@@ -93,6 +93,7 @@ export interface CrawlScrapeOptions {
   mobile?: boolean;
   skipTlsVerification?: boolean;
   removeBase64Images?: boolean;
+  blockAds?: boolean;
 }
 
 export type Action = {
@@ -167,6 +168,7 @@ export interface CrawlParams {
     url: string;
     headers?: Record<string, string>;
     metadata?: Record<string, string>;
+    events?: ["completed", "failed", "page", "started"][number][];
   };
   deduplicateSimilarURLs?: boolean;
   ignoreQueryParameters?: boolean;
@@ -235,6 +237,7 @@ export interface MapParams {
   includeSubdomains?: boolean;
   sitemapOnly?: boolean;
   limit?: number;
+  timeout?: number;
 }
 
 /**
@@ -1298,7 +1301,9 @@ export class CrawlWatcher extends TypedEventTarget<CrawlWatcherEvents> {
   constructor(id: string, app: FirecrawlApp) {
     super();
     this.id = id;
-    this.ws = new WebSocket(`${app.apiUrl}/v1/crawl/${id}`, app.apiKey);
+    // replace `http` with `ws` (`http://` -> `ws://` and `https://` -> `wss://`)
+    const wsUrl = app.apiUrl.replace(/^http/, "ws");
+    this.ws = new WebSocket(`${wsUrl}/v1/crawl/${id}`, app.apiKey);
     this.status = "scraping";
     this.data = [];
 

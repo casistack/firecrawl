@@ -101,7 +101,7 @@ export async function getMapResults({
       },
       true,
       true,
-      30000
+      30000,
     );
     if (sitemap > 0) {
       links = links
@@ -164,16 +164,24 @@ export async function getMapResults({
     const twoDaysAgo = new Date();
     twoDaysAgo.setDate(twoDaysAgo.getDate() - 2);
 
-
     // If sitemap is not ignored and either we have few URLs (<100) or the data is stale (>2 days old), fetch fresh sitemap
     if (
-      !ignoreSitemap && 
+      !ignoreSitemap &&
       (sitemapIndexResult.urls.length < 100 ||
-      new Date(sitemapIndexResult.lastUpdated) < twoDaysAgo)
+        new Date(sitemapIndexResult.lastUpdated) < twoDaysAgo)
     ) {
-      await crawler.tryGetSitemap(urls => {
-        links.push(...urls);
-      }, true, false, 30000);
+      try {
+        await crawler.tryGetSitemap(
+          (urls) => {
+            links.push(...urls);
+          },
+          true,
+          false,
+          30000,
+        );
+      } catch (e) {
+        logger.warn("tryGetSitemap threw an error", { error: e });
+      }
     }
 
     if (!cachedResult) {
@@ -249,7 +257,7 @@ export async function getMapResults({
     },
     {
       priority: 10,
-    }
+    },
   );
 
   return {
@@ -268,17 +276,34 @@ export async function mapController(
 ) {
   req.body = mapRequestSchema.parse(req.body);
 
-  const result = await getMapResults({
-    url: req.body.url,
-    search: req.body.search,
-    limit: req.body.limit,
-    ignoreSitemap: req.body.ignoreSitemap,
-    includeSubdomains: req.body.includeSubdomains,
-    crawlerOptions: req.body,
-    origin: req.body.origin,
-    teamId: req.auth.team_id,
-    plan: req.auth.plan,
-  });
+  let result: Awaited<ReturnType<typeof getMapResults>>;
+  try {
+    result = await Promise.race([
+      getMapResults({
+        url: req.body.url,
+        search: req.body.search,
+        limit: req.body.limit,
+        ignoreSitemap: req.body.ignoreSitemap,
+        includeSubdomains: req.body.includeSubdomains,
+        crawlerOptions: req.body,
+        origin: req.body.origin,
+        teamId: req.auth.team_id,
+        plan: req.auth.plan,
+      }),
+      ...(req.body.timeout !== undefined ? [
+        new Promise((resolve, reject) => setTimeout(() => reject("timeout"), req.body.timeout))
+      ] : []),
+    ]) as any;
+  } catch (error) {
+    if (error === "timeout") {
+      return res.status(408).json({
+        success: false,
+        error: "Request timed out",
+      });
+    } else {
+      throw error;
+    }
+  }
 
   // Bill the team
   billTeam(req.auth.team_id, req.acuc?.sub_id, 1).catch((error) => {

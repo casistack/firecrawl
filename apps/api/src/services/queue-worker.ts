@@ -48,6 +48,7 @@ import { configDotenv } from "dotenv";
 import { scrapeOptions } from "../controllers/v1/types";
 import { getRateLimiterPoints } from "./rate-limiter";
 import {
+  calculateJobTimeToRun,
   cleanOldConcurrencyLimitEntries,
   pushConcurrencyLimitActiveJob,
   removeConcurrencyLimitActiveJob,
@@ -93,7 +94,9 @@ const runningJobs: Set<string> = new Set();
 async function finishCrawlIfNeeded(job: Job & { id: string }, sc: StoredCrawl) {
   if (await finishCrawl(job.data.crawl_id)) {
     (async () => {
-      const originUrl = sc.originUrl ? normalizeUrlOnlyHostname(sc.originUrl) : undefined;
+      const originUrl = sc.originUrl
+        ? normalizeUrlOnlyHostname(sc.originUrl)
+        : undefined;
       // Get all visited unique URLs from Redis
       const visitedUrls = await redisConnection.smembers(
         "crawl:" + job.data.crawl_id + ":visited_unique",
@@ -113,7 +116,7 @@ async function finishCrawlIfNeeded(job: Job & { id: string }, sc: StoredCrawl) {
           },
           {
             priority: 10,
-          }
+          },
         );
       }
     })();
@@ -232,7 +235,10 @@ const processJobInternal = async (token: string, job: Job & { id: string }) => {
   });
 
   const extendLockInterval = setInterval(async () => {
-    logger.info(`🐂 Worker extending lock on job ${job.id}`);
+    logger.info(`🐂 Worker extending lock on job ${job.id}`, {
+      extendInterval: jobLockExtendInterval,
+      extensionTime: jobLockExtensionTime,
+    });
     await job.extendLock(token, jobLockExtensionTime);
   }, jobLockExtendInterval);
 
@@ -315,11 +321,14 @@ const processExtractJobInternal = async (
       return result;
     } else {
       // throw new Error(result.error || "Unknown error during extraction");
-      
+
       await job.moveToCompleted(result, token, false);
       await updateExtract(job.data.extractId, {
         status: "failed",
-        error: result.error ?? "Unknown error, please contact help@firecrawl.com. Extract id: " + job.data.extractId,
+        error:
+          result.error ??
+          "Unknown error, please contact help@firecrawl.com. Extract id: " +
+            job.data.extractId,
       });
 
       return result;
@@ -333,8 +342,12 @@ const processExtractJobInternal = async (
       },
     });
 
-    // Move job to failed state in Redis
-    await job.moveToFailed(error, token, false);
+    try {
+      // Move job to failed state in Redis
+      await job.moveToFailed(error, token, false);
+    } catch (e) {
+      logger.log("Failed to move job to failed state in Redis", { error });
+    }
 
     await updateExtract(job.data.extractId, {
       status: "failed",
@@ -344,7 +357,14 @@ const processExtractJobInternal = async (
         "Unknown error, please contact help@firecrawl.com. Extract id: " +
           job.data.extractId,
     });
-    return { success: false, error: error.error ?? error ?? "Unknown error, please contact help@firecrawl.com. Extract id: " + job.data.extractId };
+    return {
+      success: false,
+      error:
+        error.error ??
+        error ??
+        "Unknown error, please contact help@firecrawl.com. Extract id: " +
+          job.data.extractId,
+    };
     // throw error;
   } finally {
     clearInterval(extendLockInterval);
@@ -427,7 +447,7 @@ const workerFun = async (
           // we are 1 under the limit, assuming the job insertion logic never over-inserts. - MG
           const nextJob = await takeConcurrencyLimitedJob(job.data.team_id);
           if (nextJob !== null) {
-            await pushConcurrencyLimitActiveJob(job.data.team_id, nextJob.id);
+            await pushConcurrencyLimitActiveJob(job.data.team_id, nextJob.id, calculateJobTimeToRun(nextJob));
 
             await queue.add(
               nextJob.id,
@@ -865,7 +885,7 @@ async function processJob(job: Job & { id: string }, token: string) {
           );
 
           const links = crawler.filterLinks(
-            crawler.extractLinksFromHTML(
+            await crawler.extractLinksFromHTML(
               rawHtml ?? "",
               doc.metadata?.url ?? doc.metadata?.sourceURL ?? sc.originUrl!,
             ),
@@ -945,13 +965,15 @@ async function processJob(job: Job & { id: string }, token: string) {
       }
 
       if (job.data.team_id !== process.env.BACKGROUND_INDEX_TEAM_ID!) {
-        billTeam(job.data.team_id, undefined, creditsToBeBilled, logger).catch((error) => {
-          logger.error(
-            `Failed to bill team ${job.data.team_id} for ${creditsToBeBilled} credits`,
-            { error },
-          );
-          // Optionally, you could notify an admin or add to a retry queue here
-        });
+        billTeam(job.data.team_id, undefined, creditsToBeBilled, logger).catch(
+          (error) => {
+            logger.error(
+              `Failed to bill team ${job.data.team_id} for ${creditsToBeBilled} credits`,
+              { error },
+            );
+            // Optionally, you could notify an admin or add to a retry queue here
+          },
+        );
       }
     }
 
@@ -970,11 +992,12 @@ async function processJob(job: Job & { id: string }, token: string) {
 
       await finishCrawlIfNeeded(job, sc);
     }
-    
+
     const isEarlyTimeout =
       error instanceof Error && error.message === "timeout";
     const isCancelled =
-      error instanceof Error && error.message === "Parent crawl/batch scrape was cancelled";
+      error instanceof Error &&
+      error.message === "Parent crawl/batch scrape was cancelled";
 
     if (isEarlyTimeout) {
       logger.error(`🐂 Job timed out ${job.id}`);

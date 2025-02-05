@@ -1,5 +1,5 @@
 import { parseApi } from "../lib/parseApi";
-import { getRateLimiter } from "../services/rate-limiter";
+import { getRateLimiter, isTestSuiteToken } from "../services/rate-limiter";
 import {
   AuthResponse,
   NotificationType,
@@ -94,8 +94,9 @@ export async function getACUC(
     let retries = 0;
     const maxRetries = 5;
 
+    let isExtract = (mode === RateLimiterMode.Extract || mode === RateLimiterMode.ExtractStatus)
     let rpcName =
-      mode === RateLimiterMode.Extract || mode === RateLimiterMode.ExtractStatus
+      isExtract
         ? "auth_credit_usage_chunk_extract"
         : "auth_credit_usage_chunk_test_22_credit_pack_n_extract";
     while (retries < maxRetries) {
@@ -104,7 +105,6 @@ export async function getACUC(
         { input_key: api_key },
         { get: true },
       ));
-
 
       if (!error) {
         break;
@@ -133,7 +133,7 @@ export async function getACUC(
       setCachedACUC(api_key, chunk);
     }
 
-    return chunk;
+    return chunk ? { ...chunk, is_extract: isExtract } : null;
   } else {
     return null;
   }
@@ -146,7 +146,7 @@ export async function clearACUC(api_key: string): Promise<void> {
     modes.map(async (mode) => {
       const cacheKey = `acuc_${api_key}_${mode}`;
       await deleteKey(cacheKey);
-    })
+    }),
   );
 
   // Also clear the base cache key
@@ -207,7 +207,7 @@ export async function supaAuthenticateUser(
     } else {
       rateLimiter = getRateLimiter(RateLimiterMode.Preview, token);
     }
-    teamId = "preview";
+    teamId = `preview_${iptoken}`;
     plan = "free";
   } else {
     normalizedApi = parseApi(token);
@@ -231,7 +231,6 @@ export async function supaAuthenticateUser(
 
     teamId = chunk.team_id;
     priceId = chunk.price_id;
-
 
     plan = getPlanByPriceId(priceId);
     subscriptionData = {
@@ -334,7 +333,7 @@ export async function supaAuthenticateUser(
       mode === RateLimiterMode.Extract ||
       mode === RateLimiterMode.Search)
   ) {
-    return { success: true, team_id: "preview", chunk: null, plan: "free" };
+    return { success: true, team_id: `preview_${iptoken}`, chunk: null, plan: "free" };
     // check the origin of the request and make sure its from firecrawl.dev
     // const origin = req.headers.origin;
     // if (origin && origin.includes("firecrawl.dev")){
@@ -345,6 +344,16 @@ export async function supaAuthenticateUser(
     // }
 
     // return { success: false, error: "Unauthorized: Invalid token", status: 401 };
+  }
+
+  if (token && isTestSuiteToken(token)) {
+    return {
+      success: true,
+      team_id: teamId ?? undefined,
+      // Now we have a test suite plan
+      plan: "testSuite",
+      chunk
+    };
   }
 
   return {

@@ -28,6 +28,11 @@ content-type: application/json
 GET {{baseUrl}}/v1/crawl/{{crawlId}} HTTP/1.1
 Authorization: Bearer {{$dotenv TEST_API_KEY}}
 
+### Cancel Crawl
+@crawlId = {{crawl.response.body.$.id}}
+# @name cancelCrawl
+DELETE {{baseUrl}}/v1/crawl/{{crawlId}} HTTP/1.1
+Authorization: Bearer {{$dotenv TEST_API_KEY}}
 
 ### Batch Scrape Websites
 # @name batchScrape
@@ -90,4 +95,8 @@ content-type: application/json
 @extractFirecrawlId = {{extractFirecrawl.response.body.$.id}}
 # @name extractFirecrawlStatus 
 GET {{baseUrl}}/v1/extract/{{extractFirecrawlId}} HTTP/1.1
+Authorization: Bearer {{$dotenv TEST_API_KEY}}
+
+###
+DELETE {{baseUrl}}/v1/crawl/c94136f9-86c1-4a97-966c-1c8e0274778f HTTP/1.1
 Authorization: Bearer {{$dotenv TEST_API_KEY}}
