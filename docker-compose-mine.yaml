@@ -17,6 +17,8 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
       - MODEL_NAME=${MODEL_NAME:-gpt-4o}
+      - MODEL_EMBEDDING_NAME=${MODEL_EMBEDDING_NAME}
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL}
       - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
       - LLAMAPARSE_API_KEY=${LLAMAPARSE_API_KEY}
       - LOGTAIL_KEY=${LOGTAIL_KEY}
@@ -33,6 +35,11 @@ services:
       - LOGGING_LEVEL=${LOGGING_LEVEL:-info}
       - FIRECRAWL_API_KEY=${FIRECRAWL_API_KEY}
       - FLY_PROCESS_GROUP=app
+      - SERPER_API_KEY=${SERPER_API_KEY}
+      - SEARCHAPI_API_KEY=${SEARCHAPI_API_KEY}
+      - SEARXNG_ENDPOINT=${SEARXNG_ENDPOINT}
+      - SEARXNG_ENGINES=${SEARXNG_ENGINES}
+      - SEARXNG_CATEGORIES=${SEARXNG_CATEGORIES}
     command: [ "pnpm", "run", "start:production" ]
     depends_on:
       - redis
@@ -41,7 +48,7 @@ services:
   worker:
     build:
       context: ./apps/api
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile-mine
     environment:
       - REDIS_URL=redis://redis:6379
       - REDIS_RATE_LIMIT_URL=redis://redis:6379
@@ -51,6 +58,8 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
       - MODEL_NAME=${MODEL_NAME:-gpt-4o}
+      - MODEL_EMBEDDING_NAME=${MODEL_EMBEDDING_NAME}
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL}
       - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
       - LLAMAPARSE_API_KEY=${LLAMAPARSE_API_KEY}
       - LOGTAIL_KEY=${LOGTAIL_KEY}
@@ -67,6 +76,11 @@ services:
       - LOGGING_LEVEL=${LOGGING_LEVEL:-info}
       - FIRECRAWL_API_KEY=${FIRECRAWL_API_KEY}
       - FLY_PROCESS_GROUP=worker
+      - SERPER_API_KEY=${SERPER_API_KEY}
+      - SEARCHAPI_API_KEY=${SEARCHAPI_API_KEY}
+      - SEARXNG_ENDPOINT=${SEARXNG_ENDPOINT}
+      - SEARXNG_ENGINES=${SEARXNG_ENGINES}
+      - SEARXNG_CATEGORIES=${SEARXNG_CATEGORIES}
     command: [ "pnpm", "run", "workers" ]
     depends_on:
       - redis
@@ -75,7 +89,7 @@ services:
 
   playwright-service:
     build:
-      context: ./apps/playwright-service
+      context: ./apps/playwright-service-ts
       dockerfile: Dockerfile
     ports:
       - "3000"
