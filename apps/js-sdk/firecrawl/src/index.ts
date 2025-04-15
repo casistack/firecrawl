@@ -68,10 +68,31 @@ export interface FirecrawlDocument<T = any, ActionsSchema extends (ActionsResult
   screenshot?: string;
   metadata?: FirecrawlDocumentMetadata;
   actions: ActionsSchema;
-  compare?: {
+  changeTracking?: {
     previousScrapeAt: string | null;
     changeStatus: "new" | "same" | "changed" | "removed";
     visibility: "visible" | "hidden";
+    diff?: {
+      text: string;
+      json: {
+        files: Array<{
+          from: string | null;
+          to: string | null;
+          chunks: Array<{
+            content: string;
+            changes: Array<{
+              type: string;
+              normal?: boolean;
+              ln?: number;
+              ln1?: number;
+              ln2?: number;
+              content: string;
+            }>;
+          }>;
+        }>;
+      };
+    };
+    json?: any;
   };
   // v1 search only
   title?: string;
@@ -83,7 +104,7 @@ export interface FirecrawlDocument<T = any, ActionsSchema extends (ActionsResult
  * Defines the options and configurations available for scraping web content.
  */
 export interface CrawlScrapeOptions {
-  formats?: ("markdown" | "html" | "rawHtml" | "content" | "links" | "screenshot" | "screenshot@fullPage" | "extract" | "json" | "compare")[];
+  formats?: ("markdown" | "html" | "rawHtml" | "content" | "links" | "screenshot" | "screenshot@fullPage" | "extract" | "json" | "changeTracking")[];
   headers?: Record<string, string>;
   includeTags?: string[];
   excludeTags?: string[];
@@ -140,7 +161,13 @@ export interface ScrapeParams<LLMSchema extends zt.ZodSchema = any, ActionsSchem
     schema?: LLMSchema;
     systemPrompt?: string;
   }
+  changeTrackingOptions?: {
+    prompt?: string;
+    schema?: any;
+    modes?: ("json" | "git-diff")[];
+  }
   actions?: ActionsSchema;
+  agent?: AgentOptions;
 }
 
 export interface ActionsResult {
@@ -270,6 +297,21 @@ export interface MapResponse {
  * Parameters for extracting information from URLs.
  * Defines options for extracting information from URLs.
  */
+export interface AgentOptions {
+  model?: string;
+  prompt?: string;
+  sessionId?: string;
+}
+
+/**
+ * Parameters for extracting information from URLs.
+ * Defines options for extracting information from URLs.
+ */
+export interface AgentOptionsExtract {
+  model?: string;
+  sessionId?: string;
+}
+
 export interface ExtractParams<LLMSchema extends zt.ZodSchema = any> {
   prompt?: string;
   schema?: LLMSchema | object;
@@ -280,6 +322,7 @@ export interface ExtractParams<LLMSchema extends zt.ZodSchema = any> {
   origin?: string;
   showSources?: boolean;
   scrapeOptions?: CrawlScrapeOptions;
+  agent?: AgentOptionsExtract;
 }
 
 /**
