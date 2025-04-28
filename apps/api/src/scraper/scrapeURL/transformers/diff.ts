@@ -6,9 +6,9 @@ import gitDiff from 'git-diff';
 import parseDiff from 'parse-diff';
 import { generateCompletions } from "./llmExtract";
 
-async function extractDataWithSchema(content: string, meta: Meta): Promise<{ extract: any, cost: number } | null> {
+async function extractDataWithSchema(content: string, meta: Meta): Promise<{ extract: any } | null> {
     try {
-        const { extract, cost } = await generateCompletions({
+        const { extract } = await generateCompletions({
             logger: meta.logger.child({
                 method: "extractDataWithSchema/generateCompletions",
             }),
@@ -18,9 +18,16 @@ async function extractDataWithSchema(content: string, meta: Meta): Promise<{ ext
                 systemPrompt: "Extract the requested information from the content based on the provided schema.",
                 temperature: 0
             },
-            markdown: content
+            markdown: content,
+            costTrackingOptions: {
+                costTracking: meta.costTracking,
+                metadata: {
+                    module: "extract",
+                    method: "extractDataWithSchema",
+                },
+            },
         });
-        return { extract, cost };
+        return { extract };
     } catch (error) {
         meta.logger.error("Error extracting data with schema", { error });
         return null;
@@ -52,11 +59,16 @@ function compareExtractedData(previousData: any, currentData: any): any {
 
 export async function deriveDiff(meta: Meta, document: Document): Promise<Document> {
   if (meta.options.formats.includes("changeTracking")) {
+    const start = Date.now();
     const res = await supabase_service
         .rpc("diff_get_last_scrape_3", {
             i_team_id: meta.internalOptions.teamId,
             i_url: document.metadata.sourceURL ?? meta.url,
         });
+    const end = Date.now();
+    if (end - start > 100) {
+        meta.logger.debug("Diffing took a while", { time: end - start, params: { i_team_id: meta.internalOptions.teamId, i_url: document.metadata.sourceURL ?? meta.url } });
+    }
 
     const data: {
         o_job_id: string,
@@ -145,19 +157,6 @@ export async function deriveDiff(meta: Meta, document: Document): Promise<Docume
                 
                 if (previousData && currentData) {
                     document.changeTracking.json = compareExtractedData(previousData.extract, currentData.extract);
-
-                    if (document.metadata.costTracking) {
-                        document.metadata.costTracking.otherCallCount += 2;
-                        document.metadata.costTracking.otherCost = document.metadata.costTracking.otherCost + previousData.cost + currentData.cost;
-                    } else {
-                        document.metadata.costTracking = {
-                            smartScrapeCallCount: 0,
-                            smartScrapeCost: 0,
-                            otherCallCount: 2,
-                            otherCost: previousData.cost + currentData.cost,
-                            totalCost: previousData.cost + currentData.cost
-                        }
-                    }
                 } else {
                     const { extract } = await generateCompletions({
                         logger: meta.logger.child({
@@ -171,9 +170,16 @@ export async function deriveDiff(meta: Meta, document: Document): Promise<Docume
                             temperature: 0
                         },
                         markdown: `Previous Content:\n${previousMarkdown}\n\nCurrent Content:\n${currentMarkdown}`,
-                        previousWarning: document.warning
+                        previousWarning: document.warning,
+                        costTrackingOptions: {
+                            costTracking: meta.costTracking,
+                            metadata: {
+                                module: "diff",
+                                method: "deriveDiff",
+                            },
+                        },
                     });
-                    
+
                     document.changeTracking.json = extract;
                 }
             } catch (error) {

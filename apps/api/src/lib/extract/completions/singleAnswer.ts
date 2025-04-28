@@ -7,6 +7,7 @@ import { buildDocument } from "../build-document";
 import { Document, TokenUsage } from "../../../controllers/v1/types";
 import { getModel } from "../../../lib/generic-ai";
 import { extractData } from "../../../scraper/scrapeURL/lib/extractSmartScrape";
+import { CostTracking } from "../extraction-service";
 
 export async function singleAnswerCompletion({
   singleAnswerDocs,
@@ -14,7 +15,10 @@ export async function singleAnswerCompletion({
   links,
   prompt,
   systemPrompt,
-  useAgent
+  useAgent,
+  extractId,
+  sessionId,
+  costTracking,
 }: {
   singleAnswerDocs: Document[];
   rSchema: any;
@@ -22,18 +26,21 @@ export async function singleAnswerCompletion({
   prompt: string;
   systemPrompt: string;
   useAgent: boolean;
+  extractId: string;
+  sessionId: string;
+  costTracking: CostTracking;
 }): Promise<{
   extract: any;
   tokenUsage: TokenUsage;
   sources: string[];
-  smartScrapeCallCount: number;
-  smartScrapeCost: number;
-  otherCallCount: number;
-  otherCost: number;
 }> {
   const docsPrompt = `Today is: ` + new Date().toISOString() + `.\n` + prompt;
   const generationOptions: GenerateCompletionsOptions = {
-    logger: logger.child({ module: "extract", method: "generateCompletions" }),
+    logger: logger.child({
+      module: "extract",
+      method: "generateCompletions",
+      extractId,
+    }),
     options: {
       mode: "llm",
       systemPrompt:
@@ -41,16 +48,26 @@ export async function singleAnswerCompletion({
         "Always prioritize using the provided content to answer the question. Do not make up an answer. Do not hallucinate. In case you can't find the information and the string is required, instead of 'N/A' or 'Not speficied', return an empty string: '', if it's not a string and you can't find the information, return null. Be concise and follow the schema always if provided.",
         prompt: docsPrompt,
         schema: rSchema,
+    },
+    markdown: `${singleAnswerDocs.map((x, i) => `[START_PAGE (ID: ${i})]` + buildDocument(x)).join("\n")} [END_PAGE]\n`,
+    isExtractEndpoint: true,
+    model: getModel("gemini-2.5-pro-preview-03-25", "vertex"),
+    retryModel: getModel("gemini-2.5-pro-preview-03-25", "google"),
+    costTrackingOptions: {
+      costTracking,
+      metadata: {
+        module: "extract",
+        method: "singleAnswerCompletion",
       },
-      markdown: `${singleAnswerDocs.map((x, i) => `[START_PAGE (ID: ${i})]` + buildDocument(x)).join("\n")} [END_PAGE]\n`,
-      isExtractEndpoint: true,
-      model: getModel("gemini-2.0-flash", "google"),
-    };
-
-  const { extractedDataArray, warning, smartScrapeCost, otherCost, smartScrapeCallCount, otherCallCount } = await extractData({
+    },
+  };
+    
+  const { extractedDataArray, warning } = await extractData({
     extractOptions: generationOptions,
     urls: singleAnswerDocs.map(doc => doc.metadata.url || doc.metadata.sourceURL || ""),
     useAgent,
+    extractId,
+    sessionId,
   });
 
   const completion = {
@@ -59,7 +76,7 @@ export async function singleAnswerCompletion({
       promptTokens: 0,
       completionTokens: 0,
       totalTokens: 0,
-      model: "gemini-2.0-flash",
+      model: "gemini-2.5-pro-preview-03-25",
     },
     sources: singleAnswerDocs.map(
       (doc) => doc.metadata.url || doc.metadata.sourceURL || "",
@@ -90,9 +107,5 @@ export async function singleAnswerCompletion({
     sources: singleAnswerDocs.map(
       (doc) => doc.metadata.url || doc.metadata.sourceURL || "",
     ),
-    smartScrapeCost,
-    otherCost,
-    smartScrapeCallCount,
-    otherCallCount,
   };
 }

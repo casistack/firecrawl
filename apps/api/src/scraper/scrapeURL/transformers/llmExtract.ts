@@ -11,6 +11,7 @@ import { EngineResultsTracker, Meta } from "..";
 import { logger } from "../../../lib/logger";
 import { modelPrices } from "../../../lib/extract/usage/model-prices";
 import {
+  AISDKError,
   generateObject,
   generateText,
   LanguageModel,
@@ -22,7 +23,7 @@ import { z } from "zod";
 import fs from "fs/promises";
 import Ajv from "ajv";
 import { extractData } from "../lib/extractSmartScrape";
-
+import { CostTracking } from "../../../lib/extract/extraction-service";
 // TODO: fix this, it's horrible
 type LanguageModelV1ProviderMetadata = {
   anthropic?: {
@@ -186,6 +187,9 @@ export function calculateCost(
 ) {
   const modelCosts = {
     "openai/o3-mini": { input_cost: 1.1, output_cost: 4.4 },
+    "gpt-4o-mini": { input_cost: 0.15, output_cost: 0.6 },
+    "openai/gpt-4o-mini": { input_cost: 0.15, output_cost: 0.6 },
+    "openai/gpt-4o": { input_cost: 2.5, output_cost: 10 },
     "google/gemini-2.0-flash-001": { input_cost: 0.15, output_cost: 0.6 },
     "deepseek/deepseek-r1": { input_cost: 0.55, output_cost: 2.19 },
     "google/gemini-2.0-flash-thinking-exp:free": {
@@ -203,12 +207,9 @@ export function calculateCost(
     let outputCost = 0;
     if (inputTokens <= 200000) {
       inputCost = 1.25;
-    } else {
-      inputCost = 2.5;
-    }
-    if (outputTokens <= 200000) {
       outputCost = 10.0;
     } else {
+      inputCost = 2.5;
       outputCost = 15.0;
     }
     modelCost = { input_cost: inputCost, output_cost: outputCost };
@@ -231,6 +232,10 @@ export type GenerateCompletionsOptions = {
   mode?: "object" | "no-object";
   providerOptions?: LanguageModelV1ProviderMetadata;
   retryModel?: LanguageModel;
+  costTrackingOptions: {
+    costTracking: CostTracking;
+    metadata: Record<string, any>;
+  };
 };
 export async function generateCompletions({
   logger,
@@ -242,13 +247,13 @@ export async function generateCompletions({
   mode = "object",
   providerOptions,
   retryModel = getModel("claude-3-5-sonnet-20240620", "anthropic"),
+  costTrackingOptions,
 }: GenerateCompletionsOptions): Promise<{
   extract: any;
   numTokens: number;
   warning: string | undefined;
   totalUsage: TokenUsage;
   model: string;
-  cost: number;
 }> {
   let extract: any;
   let warning: string | undefined;
@@ -258,23 +263,6 @@ export async function generateCompletions({
   if (markdown === undefined) {
     throw new Error("document.markdown is undefined -- this is unexpected");
   }
-
-  const { maxInputTokens, maxOutputTokens } = getModelLimits(
-    currentModel.modelId,
-  );
-  // Calculate 80% of max input tokens (for content)
-  const maxTokensSafe = Math.floor(maxInputTokens * 0.8);
-
-  // Use the new trimming function
-  const {
-    text: trimmedMarkdown,
-    numTokens,
-    warning: trimWarning,
-  } = trimToTokenLimit(markdown, maxTokensSafe, model.modelId, previousWarning);
-
-  // WE USE BIG MODELS NOW
-  // markdown = trimmedMarkdown;
-  // warning = trimWarning;
 
   try {
     const prompt =
@@ -295,23 +283,36 @@ export async function generateCompletions({
           },
         });
 
+        costTrackingOptions.costTracking.addCall({
+          type: "other",
+          metadata: {
+            ...costTrackingOptions.metadata,
+            gcDetails: "no-object",
+          },
+          model: currentModel.modelId,
+          cost: calculateCost(
+            currentModel.modelId,
+            result.usage?.promptTokens ?? 0,
+            result.usage?.completionTokens ?? 0,
+          ),
+          tokens: {
+            input: result.usage?.promptTokens ?? 0,
+            output: result.usage?.completionTokens ?? 0,
+          }
+        });
+
         extract = result.text;
 
         return {
           extract,
           warning,
-          numTokens,
+          numTokens: result.usage?.promptTokens ?? 0,
           totalUsage: {
-            promptTokens: numTokens,
+            promptTokens: result.usage?.promptTokens ?? 0,
             completionTokens: result.usage?.completionTokens ?? 0,
-            totalTokens: numTokens + (result.usage?.completionTokens ?? 0),
+            totalTokens: result.usage?.promptTokens ?? 0 + (result.usage?.completionTokens ?? 0),
           },
           model: currentModel.modelId,
-          cost: calculateCost(
-            currentModel.modelId,
-            numTokens,
-            result.usage?.completionTokens ?? 0,
-          ),
         };
       } catch (error) {
         lastError = error as Error;
@@ -338,21 +339,34 @@ export async function generateCompletions({
 
             extract = result.text;
 
-            return {
-              extract,
-              warning,
-              numTokens,
-              totalUsage: {
-                promptTokens: numTokens,
-                completionTokens: result.usage?.completionTokens ?? 0,
-                totalTokens: numTokens + (result.usage?.completionTokens ?? 0),
+            costTrackingOptions.costTracking.addCall({
+              type: "other",
+              metadata: {
+                ...costTrackingOptions.metadata,
+                gcDetails: "no-object fallback",
               },
               model: currentModel.modelId,
               cost: calculateCost(
                 currentModel.modelId,
-                numTokens,
+                result.usage?.promptTokens ?? 0,
                 result.usage?.completionTokens ?? 0,
               ),
+              tokens: {
+                input: result.usage?.promptTokens ?? 0,
+                output: result.usage?.completionTokens ?? 0,
+              }
+            });
+
+            return {
+              extract,
+              warning,
+              numTokens: result.usage?.promptTokens ?? 0,
+              totalUsage: {
+                promptTokens: result.usage?.promptTokens ?? 0,
+                completionTokens: result.usage?.completionTokens ?? 0,
+                totalTokens: result.usage?.promptTokens ?? 0 + (result.usage?.completionTokens ?? 0),
+              },
+              model: currentModel.modelId,
             };
           } catch (retryError) {
             lastError = retryError as Error;
@@ -403,6 +417,8 @@ export async function generateCompletions({
     const repairConfig = {
       experimental_repairText: async ({ text, error }) => {
         // AI may output a markdown JSON code block. Remove it - mogery
+        logger.debug("Repairing text", { textType: typeof text, textPeek: JSON.stringify(text).slice(0, 100) + "...", error });
+
         if (typeof text === "string" && text.trim().startsWith("```")) {
           if (text.trim().startsWith("```json")) {
             text = text.trim().slice("```json".length).trim();
@@ -417,12 +433,15 @@ export async function generateCompletions({
           // If this fixes the JSON, just return it. If not, continue - mogery
           try {
             JSON.parse(text);
+            logger.debug("Repaired text with string manipulation");
             return text;
-          } catch (_) {}
+          } catch (e) {
+            logger.error("Even after repairing, failed to parse JSON", { error: e });
+          }
         }
 
         try {
-          const { text: fixedText } = await generateText({
+          const { text: fixedText, usage: repairUsage } = await generateText({
             model: currentModel,
             prompt: `Fix this JSON that had the following error: ${error}\n\nOriginal text:\n${text}\n\nReturn only the fixed JSON, no explanation.`,
             system:
@@ -433,6 +452,25 @@ export async function generateCompletions({
               },
             },
           });
+
+          costTrackingOptions.costTracking.addCall({
+            type: "other",
+            metadata: {
+              ...costTrackingOptions.metadata,
+              gcDetails: "repairConfig",
+            },
+            cost: calculateCost(
+              currentModel.modelId,
+              repairUsage?.promptTokens ?? 0,
+              repairUsage?.completionTokens ?? 0,
+            ),
+            model: currentModel.modelId,
+            tokens: {
+              input: repairUsage?.promptTokens ?? 0,
+              output: repairUsage?.completionTokens ?? 0,
+            },
+          });
+          logger.debug("Repaired text with LLM");
           return fixedText;
         } catch (repairError) {
           lastError = repairError as Error;
@@ -466,9 +504,33 @@ export async function generateCompletions({
     //   JSON.stringify(generateObjectConfig, null, 2),
     // );
 
+    logger.debug("Generating object...", { generateObjectConfig: {
+      ...generateObjectConfig,
+      prompt: generateObjectConfig.prompt.slice(0, 100) + "...",
+      system: generateObjectConfig.system?.slice(0, 100) + "...",
+    }, model, retryModel });
+
     let result: { object: any; usage: TokenUsage } | undefined;
     try {
       result = await generateObject(generateObjectConfig);
+      costTrackingOptions.costTracking.addCall({
+        type: "other",
+        metadata: {
+          ...costTrackingOptions.metadata,
+          gcDetails: "generateObject",
+          gcModel: generateObjectConfig.model.modelId,
+        },
+        tokens: {
+          input: result.usage?.promptTokens ?? 0,
+          output: result.usage?.completionTokens ?? 0,
+        },
+        model: currentModel.modelId,
+        cost: calculateCost(
+          currentModel.modelId,
+          result.usage?.promptTokens ?? 0,
+          result.usage?.completionTokens ?? 0,
+        ),
+      });
     } catch (error) {
       lastError = error as Error;
       if (
@@ -486,6 +548,24 @@ export async function generateCompletions({
             model: currentModel,
           };
           result = await generateObject(retryConfig);
+          costTrackingOptions.costTracking.addCall({
+            type: "other",
+            metadata: {
+              ...costTrackingOptions.metadata,
+              gcDetails: "generateObject fallback",
+              gcModel: retryConfig.model.modelId,
+            },
+            tokens: {
+              input: result.usage?.promptTokens ?? 0,
+              output: result.usage?.completionTokens ?? 0,
+            },
+            model: currentModel.modelId,
+            cost: calculateCost(
+              currentModel.modelId,
+              result.usage?.promptTokens ?? 0,
+              result.usage?.completionTokens ?? 0,
+            ),
+          });
         } catch (retryError) {
           lastError = retryError as Error;
           logger.error("Failed with fallback model", {
@@ -541,20 +621,19 @@ export async function generateCompletions({
     }
 
     // Since generateObject doesn't provide token usage, we'll estimate it
-    const promptTokens = numTokens;
-    const completionTokens = result?.usage?.completionTokens ?? 0;
+    const promptTokens = result.usage?.promptTokens ?? 0;
+    const completionTokens = result.usage?.completionTokens ?? 0;
 
     return {
       extract,
       warning,
-      numTokens,
+      numTokens: promptTokens,
       totalUsage: {
         promptTokens,
         completionTokens,
         totalTokens: promptTokens + completionTokens,
       },
       model: currentModel.modelId,
-      cost: calculateCost(currentModel.modelId, promptTokens, completionTokens),
     };
   } catch (error) {
     lastError = error as Error;
@@ -562,7 +641,7 @@ export async function generateCompletions({
       throw new LLMRefusalError(error.message);
     }
     logger.error("LLM extraction failed", {
-      error: lastError.message,
+      error: lastError,
       model: currentModel.modelId,
       mode,
     });
@@ -592,38 +671,27 @@ export async function performLLMExtract(
       // model: getModel("qwen-qwq-32b", "groq"),
       // model: getModel("gemini-2.0-flash", "google"),
       // model: getModel("gemini-2.5-pro-preview-03-25", "vertex"),
-      model: getModel("gemini-2.5-pro-preview-03-25", "vertex"),
-      retryModel: getModel("gemini-2.5-pro-preview-03-25", "google"),
+      model: getModel("gpt-4o-mini", "openai"),
+      retryModel: getModel("gpt-4o", "openai"),
+      costTrackingOptions: {
+        costTracking: meta.costTracking,
+        metadata: {
+          module: "scrapeURL",
+          method: "performLLMExtract",
+        },
+      },
     };
 
-    const { extractedDataArray, warning, smartScrapeCost, otherCost, costLimitExceededTokenUsage } =
+    const { extractedDataArray, warning, costLimitExceededTokenUsage } =
       await extractData({
         extractOptions: generationOptions,
         urls: [meta.url],
-        useAgent: isAgentExtractModelValid(meta.options.extract?.agent?.model),
+        useAgent: false,
+        scrapeId: meta.id,
       });
 
     if (warning) {
       document.warning = warning + (document.warning ? " " + document.warning : "");
-    }
-
-    if (document.metadata.costTracking) {
-      document.metadata.costTracking.smartScrapeCallCount++;
-      document.metadata.costTracking.smartScrapeCost += smartScrapeCost;
-      document.metadata.costTracking.otherCallCount++;
-      document.metadata.costTracking.otherCost += otherCost;
-      document.metadata.costTracking.totalCost += smartScrapeCost + otherCost;
-      if (costLimitExceededTokenUsage) {
-        document.metadata.costTracking.costLimitExceededTokenUsage = costLimitExceededTokenUsage;
-      }
-    } else {
-      document.metadata.costTracking = {
-        smartScrapeCallCount: 1,
-        smartScrapeCost: smartScrapeCost,
-        otherCallCount: 1,
-        otherCost: otherCost,
-        totalCost: smartScrapeCost + otherCost,
-      };
     }
 
     // IMPORTANT: here it only get's the last page!!!
@@ -761,7 +829,9 @@ export function removeDefaultProperty(schema: any): any {
 
 export async function generateSchemaFromPrompt(
   prompt: string,
-): Promise<{ extract: any; cost: number }> {
+  logger: Logger,
+  costTracking: CostTracking,
+): Promise<{ extract: any }> {
   const model = getModel("gpt-4o", "openai");
   const retryModel = getModel("gpt-4o-mini", "openai");
   const temperatures = [0, 0.1, 0.3]; // Different temperatures to try
@@ -769,12 +839,13 @@ export async function generateSchemaFromPrompt(
 
   for (const temp of temperatures) {
     try {
-      const { extract, cost } = await generateCompletions({
+      const { extract } = await generateCompletions({
         logger: logger.child({
           method: "generateSchemaFromPrompt/generateCompletions",
         }),
         model,
         retryModel,
+        markdown: "",
         options: {
           mode: "llm",
           systemPrompt: `You are a schema generator for a web scraping system. Generate a JSON schema based on the user's prompt.
@@ -805,10 +876,16 @@ Return a valid JSON schema object with properties that would capture the informa
           prompt: `Generate a JSON schema for extracting the following information: ${prompt}`,
           // temperature: temp,
         },
-        markdown: prompt,
+        costTrackingOptions: {
+          costTracking,
+          metadata: {
+            module: "scrapeURL",
+            method: "generateSchemaFromPrompt",
+          },
+        },
       });
 
-      return { extract, cost };
+      return { extract };
     } catch (error) {
       lastError = error as Error;
       logger.warn(`Failed attempt with temperature ${temp}: ${error.message}`);

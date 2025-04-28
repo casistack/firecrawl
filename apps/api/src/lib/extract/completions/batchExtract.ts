@@ -1,4 +1,3 @@
-import { logger } from "../../../lib/logger";
 import {
   generateCompletions,
   GenerateCompletionsOptions,
@@ -11,9 +10,10 @@ import {
   buildBatchExtractSystemPrompt,
 } from "../build-prompts";
 import { getModel } from "../../generic-ai";
-
+import { CostTracking, CostLimitExceededError } from "../extraction-service";
 import fs from "fs/promises";
 import { extractData } from "../../../scraper/scrapeURL/lib/extractSmartScrape";
+import type { Logger } from "winston";
 
 type BatchExtractOptions = {
   multiEntitySchema: any;
@@ -22,6 +22,9 @@ type BatchExtractOptions = {
   systemPrompt: string;
   doc: Document;
   useAgent: boolean;
+  extractId?: string;
+  sessionId?: string;
+  costTracking: CostTracking;
 };
 
 /**
@@ -33,7 +36,7 @@ type BatchExtractOptions = {
  * @param doc - The document to extract information from
  * @returns The completion promise
  */
-export async function batchExtractPromise(options: BatchExtractOptions): Promise<{
+export async function batchExtractPromise(options: BatchExtractOptions, logger: Logger): Promise<{
   extract: any; // array of extracted data
   numTokens: number;
   totalUsage: TokenUsage;
@@ -43,9 +46,17 @@ export async function batchExtractPromise(options: BatchExtractOptions): Promise
   otherCost: number;
   smartScrapeCallCount: number;
   otherCallCount: number;
+  sessionId?: string;
 }> {
-  const { multiEntitySchema, links, prompt, systemPrompt, doc, useAgent } = options;
-
+  const {
+    multiEntitySchema,
+    links,
+    prompt,
+    systemPrompt,
+    doc,
+    useAgent,
+    extractId,
+    sessionId } = options;
 
   const generationOptions: GenerateCompletionsOptions = {
     logger: logger.child({
@@ -63,26 +74,38 @@ export async function batchExtractPromise(options: BatchExtractOptions): Promise
     },
     markdown: buildDocument(doc),
     isExtractEndpoint: true,
-    model: getModel("gemini-2.0-flash", "google"),
+    model: getModel("gemini-2.5-pro-preview-03-25", "vertex"),
+    retryModel: getModel("gemini-2.5-pro-preview-03-25", "google"),
+    costTrackingOptions: {
+      costTracking: options.costTracking,
+      metadata: {
+        module: "extract",
+        method: "batchExtractPromise",
+      },
+    },
   };
 
   let extractedDataArray: any[] = [];
   let warning: string | undefined;
   let smCost = 0, oCost = 0, smCallCount = 0, oCallCount = 0;
   try {
-    const { extractedDataArray: e, warning: w, smartScrapeCost, otherCost, smartScrapeCallCount, otherCallCount } = await extractData({
+    const {
+      extractedDataArray: e,
+      warning: w,
+    } = await extractData({
       extractOptions: generationOptions,
       urls: [doc.metadata.sourceURL || doc.metadata.url || ""],
       useAgent,
+      extractId,
+      sessionId,
     });
     extractedDataArray = e;
     warning = w;
-    smCost = smartScrapeCost;
-    oCost = otherCost;
-    smCallCount = smartScrapeCallCount;
-    oCallCount = otherCallCount;
   } catch (error) {
-    console.error(">>>>>>>error>>>>>\n", error);
+    if (error instanceof CostLimitExceededError) {
+      throw error;
+    }
+    logger.error("extractData failed", { error });
   }
 
   // await fs.writeFile(
