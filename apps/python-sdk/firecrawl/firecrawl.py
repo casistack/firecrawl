@@ -29,7 +29,7 @@ warnings.filterwarnings("ignore", message="Field name \"json\" in \"FirecrawlDoc
 warnings.filterwarnings("ignore", message="Field name \"json\" in \"ChangeTrackingData\" shadows an attribute in parent \"BaseModel\"")
 warnings.filterwarnings("ignore", message="Field name \"schema\" in \"JsonConfig\" shadows an attribute in parent \"BaseModel\"")
 warnings.filterwarnings("ignore", message="Field name \"schema\" in \"ExtractParams\" shadows an attribute in parent \"BaseModel\"")
-
+warnings.filterwarnings("ignore", message="Field name \"schema\" in \"ChangeTrackingOptions\" shadows an attribute in parent \"BaseModel\"")
 
 def get_version():
   try:
@@ -135,6 +135,12 @@ class WebhookConfig(pydantic.BaseModel):
     metadata: Optional[Dict[str, str]] = None
     events: Optional[List[Literal["completed", "failed", "page", "started"]]] = None
 
+class ChangeTrackingOptions(pydantic.BaseModel):
+    """Configuration for change tracking."""
+    modes: Optional[List[Literal["git-diff", "json"]]] = None
+    schema: Optional[Any] = None
+    prompt: Optional[str] = None
+
 class ScrapeOptions(pydantic.BaseModel):
     """Parameters for scraping operations."""
     formats: Optional[List[Literal["markdown", "html", "rawHtml", "content", "links", "screenshot", "screenshot@fullPage", "extract", "json", "changeTracking"]]] = None
@@ -150,11 +156,12 @@ class ScrapeOptions(pydantic.BaseModel):
     removeBase64Images: Optional[bool] = None
     blockAds: Optional[bool] = None
     proxy: Optional[Literal["basic", "stealth"]] = None
+    changeTrackingOptions: Optional[ChangeTrackingOptions] = None
 
 class WaitAction(pydantic.BaseModel):
     """Wait action to perform during scraping."""
     type: Literal["wait"]
-    milliseconds: int
+    milliseconds: Optional[int] = None
     selector: Optional[str] = None
 
 class ScreenshotAction(pydantic.BaseModel):
@@ -210,6 +217,7 @@ class ScrapeParams(ScrapeOptions):
     jsonOptions: Optional[JsonConfig] = None
     actions: Optional[List[Union[WaitAction, ScreenshotAction, ClickAction, WriteAction, PressAction, ScrollAction, ScrapeAction, ExecuteJavascriptAction]]] = None
     agent: Optional[AgentOptions] = None
+    webhook: Optional[WebhookConfig] = None
 
 class ScrapeResponse(FirecrawlDocument[T], Generic[T]):
     """Response from scraping operations."""
@@ -251,6 +259,7 @@ class CrawlParams(pydantic.BaseModel):
     deduplicateSimilarURLs: Optional[bool] = None
     ignoreQueryParameters: Optional[bool] = None
     regexOnFullURL: Optional[bool] = None
+    delay: Optional[int] = None  # Delay in seconds between scrapes
 
 class CrawlResponse(pydantic.BaseModel):
     """Response from crawling operations."""
@@ -453,6 +462,7 @@ class FirecrawlApp:
             extract: Optional[JsonConfig] = None,
             json_options: Optional[JsonConfig] = None,
             actions: Optional[List[Union[WaitAction, ScreenshotAction, ClickAction, WriteAction, PressAction, ScrollAction, ScrapeAction, ExecuteJavascriptAction]]] = None,
+            change_tracking_options: Optional[ChangeTrackingOptions] = None,
             **kwargs) -> ScrapeResponse[Any]:
         """
         Scrape and extract content from a URL.
@@ -474,6 +484,7 @@ class FirecrawlApp:
           extract (Optional[JsonConfig]): Content extraction settings
           json_options (Optional[JsonConfig]): JSON extraction settings
           actions (Optional[List[Union[WaitAction, ScreenshotAction, ClickAction, WriteAction, PressAction, ScrollAction, ScrapeAction, ExecuteJavascriptAction]]]): Actions to perform
+          change_tracking_options (Optional[ChangeTrackingOptions]): Change tracking settings
 
 
         Returns:
@@ -519,17 +530,27 @@ class FirecrawlApp:
             scrape_params['blockAds'] = block_ads
         if proxy:
             scrape_params['proxy'] = proxy
-        if extract:
-            if hasattr(extract.schema, 'schema'):
-                extract.schema = extract.schema.schema()
-            scrape_params['extract'] = extract.dict(exclude_none=True)
-        if json_options:
-            if hasattr(json_options.schema, 'schema'):
-                json_options.schema = json_options.schema.schema()
-            scrape_params['jsonOptions'] = json_options.dict(exclude_none=True)
+        if extract is not None:
+            extract = self._ensure_schema_dict(extract)
+            if isinstance(extract, dict) and "schema" in extract:
+                extract["schema"] = self._ensure_schema_dict(extract["schema"])
+            scrape_params['extract'] = extract if isinstance(extract, dict) else extract.dict(exclude_none=True)
+        if json_options is not None:
+            json_options = self._ensure_schema_dict(json_options)
+            if isinstance(json_options, dict) and "schema" in json_options:
+                json_options["schema"] = self._ensure_schema_dict(json_options["schema"])
+            scrape_params['jsonOptions'] = json_options if isinstance(json_options, dict) else json_options.dict(exclude_none=True)
         if actions:
-            scrape_params['actions'] = [action.dict(exclude_none=True) for action in actions]
+            scrape_params['actions'] = [action if isinstance(action, dict) else action.dict(exclude_none=True) for action in actions]
+        if change_tracking_options:
+            scrape_params['changeTrackingOptions'] = change_tracking_options if isinstance(change_tracking_options, dict) else change_tracking_options.dict(exclude_none=True)
+        
         scrape_params.update(kwargs)
+
+        if 'extract' in scrape_params and scrape_params['extract'] and 'schema' in scrape_params['extract']:
+            scrape_params['extract']['schema'] = self._ensure_schema_dict(scrape_params['extract']['schema'])
+        if 'jsonOptions' in scrape_params and scrape_params['jsonOptions'] and 'schema' in scrape_params['jsonOptions']:
+            scrape_params['jsonOptions']['schema'] = self._ensure_schema_dict(scrape_params['jsonOptions']['schema'])
 
         # Make request
         response = requests.post(
@@ -661,6 +682,7 @@ class FirecrawlApp:
         deduplicate_similar_urls: Optional[bool] = None,
         ignore_query_parameters: Optional[bool] = None,
         regex_on_full_url: Optional[bool] = None,
+        delay: Optional[int] = None,
         poll_interval: Optional[int] = 2,
         idempotency_key: Optional[str] = None,
         **kwargs
@@ -683,6 +705,7 @@ class FirecrawlApp:
             deduplicate_similar_urls (Optional[bool]): Remove similar URLs
             ignore_query_parameters (Optional[bool]): Ignore URL parameters
             regex_on_full_url (Optional[bool]): Apply regex to full URLs
+            delay (Optional[int]): Delay in seconds between scrapes
             poll_interval (Optional[int]): Seconds between status checks (default: 2)
             idempotency_key (Optional[str]): Unique key to prevent duplicate requests
             **kwargs: Additional parameters to pass to the API
@@ -728,6 +751,8 @@ class FirecrawlApp:
             crawl_params['ignoreQueryParameters'] = ignore_query_parameters
         if regex_on_full_url is not None:
             crawl_params['regexOnFullURL'] = regex_on_full_url
+        if delay is not None:
+            crawl_params['delay'] = delay
 
         # Add any additional kwargs
         crawl_params.update(kwargs)
@@ -768,6 +793,7 @@ class FirecrawlApp:
         deduplicate_similar_urls: Optional[bool] = None,
         ignore_query_parameters: Optional[bool] = None,
         regex_on_full_url: Optional[bool] = None,
+        delay: Optional[int] = None,
         idempotency_key: Optional[str] = None,
         **kwargs
     ) -> CrawlResponse:
@@ -834,6 +860,8 @@ class FirecrawlApp:
             crawl_params['ignoreQueryParameters'] = ignore_query_parameters
         if regex_on_full_url is not None:
             crawl_params['regexOnFullURL'] = regex_on_full_url
+        if delay is not None:
+            crawl_params['delay'] = delay
 
         # Add any additional kwargs
         crawl_params.update(kwargs)
@@ -1239,13 +1267,15 @@ class FirecrawlApp:
         if proxy is not None:
             scrape_params['proxy'] = proxy
         if extract is not None:
-            if hasattr(extract.schema, 'schema'):
-                extract.schema = extract.schema.schema()
-            scrape_params['extract'] = extract.dict(exclude_none=True)
+            extract = self._ensure_schema_dict(extract)
+            if isinstance(extract, dict) and "schema" in extract:
+                extract["schema"] = self._ensure_schema_dict(extract["schema"])
+            scrape_params['extract'] = extract if isinstance(extract, dict) else extract.dict(exclude_none=True)
         if json_options is not None:
-            if hasattr(json_options.schema, 'schema'):
-                json_options.schema = json_options.schema.schema()
-            scrape_params['jsonOptions'] = json_options.dict(exclude_none=True)
+            json_options = self._ensure_schema_dict(json_options)
+            if isinstance(json_options, dict) and "schema" in json_options:
+                json_options["schema"] = self._ensure_schema_dict(json_options["schema"])
+            scrape_params['jsonOptions'] = json_options if isinstance(json_options, dict) else json_options.dict(exclude_none=True)
         if actions is not None:
             scrape_params['actions'] = [action.dict(exclude_none=True) for action in actions]
         if agent is not None:
@@ -1259,6 +1289,11 @@ class FirecrawlApp:
         params_dict = final_params.dict(exclude_none=True)
         params_dict['urls'] = urls
         params_dict['origin'] = f"python-sdk@{version}"
+
+        if 'extract' in params_dict and params_dict['extract'] and 'schema' in params_dict['extract']:
+            params_dict['extract']['schema'] = self._ensure_schema_dict(params_dict['extract']['schema'])
+        if 'jsonOptions' in params_dict and params_dict['jsonOptions'] and 'schema' in params_dict['jsonOptions']:
+            params_dict['jsonOptions']['schema'] = self._ensure_schema_dict(params_dict['jsonOptions']['schema'])
 
         # Make request
         headers = self._prepare_headers(idempotency_key)
@@ -1365,13 +1400,15 @@ class FirecrawlApp:
         if proxy is not None:
             scrape_params['proxy'] = proxy
         if extract is not None:
-            if hasattr(extract.schema, 'schema'):
-                extract.schema = extract.schema.schema()
-            scrape_params['extract'] = extract.dict(exclude_none=True)
+            extract = self._ensure_schema_dict(extract)
+            if isinstance(extract, dict) and "schema" in extract:
+                extract["schema"] = self._ensure_schema_dict(extract["schema"])
+            scrape_params['extract'] = extract if isinstance(extract, dict) else extract.dict(exclude_none=True)
         if json_options is not None:
-            if hasattr(json_options.schema, 'schema'):
-                json_options.schema = json_options.schema.schema()
-            scrape_params['jsonOptions'] = json_options.dict(exclude_none=True)
+            json_options = self._ensure_schema_dict(json_options)
+            if isinstance(json_options, dict) and "schema" in json_options:
+                json_options["schema"] = self._ensure_schema_dict(json_options["schema"])
+            scrape_params['jsonOptions'] = json_options if isinstance(json_options, dict) else json_options.dict(exclude_none=True)
         if actions is not None:
             scrape_params['actions'] = [action.dict(exclude_none=True) for action in actions]
         if agent is not None:
@@ -1385,6 +1422,11 @@ class FirecrawlApp:
         params_dict = final_params.dict(exclude_none=True)
         params_dict['urls'] = urls
         params_dict['origin'] = f"python-sdk@{version}"
+
+        if 'extract' in params_dict and params_dict['extract'] and 'schema' in params_dict['extract']:
+            params_dict['extract']['schema'] = self._ensure_schema_dict(params_dict['extract']['schema'])
+        if 'jsonOptions' in params_dict and params_dict['jsonOptions'] and 'schema' in params_dict['jsonOptions']:
+            params_dict['jsonOptions']['schema'] = self._ensure_schema_dict(params_dict['jsonOptions']['schema'])
 
         # Make request
         headers = self._prepare_headers(idempotency_key)
@@ -1486,13 +1528,15 @@ class FirecrawlApp:
         if proxy is not None:
             scrape_params['proxy'] = proxy
         if extract is not None:
-            if hasattr(extract.schema, 'schema'):
-                extract.schema = extract.schema.schema()
-            scrape_params['extract'] = extract.dict(exclude_none=True)
+            extract = self._ensure_schema_dict(extract)
+            if isinstance(extract, dict) and "schema" in extract:
+                extract["schema"] = self._ensure_schema_dict(extract["schema"])
+            scrape_params['extract'] = extract if isinstance(extract, dict) else extract.dict(exclude_none=True)
         if json_options is not None:
-            if hasattr(json_options.schema, 'schema'):
-                json_options.schema = json_options.schema.schema()
-            scrape_params['jsonOptions'] = json_options.dict(exclude_none=True)
+            json_options = self._ensure_schema_dict(json_options)
+            if isinstance(json_options, dict) and "schema" in json_options:
+                json_options["schema"] = self._ensure_schema_dict(json_options["schema"])
+            scrape_params['jsonOptions'] = json_options if isinstance(json_options, dict) else json_options.dict(exclude_none=True)
         if actions is not None:
             scrape_params['actions'] = [action.dict(exclude_none=True) for action in actions]
         if agent is not None:
@@ -1506,6 +1550,11 @@ class FirecrawlApp:
         params_dict = final_params.dict(exclude_none=True)
         params_dict['urls'] = urls
         params_dict['origin'] = f"python-sdk@{version}"
+
+        if 'extract' in params_dict and params_dict['extract'] and 'schema' in params_dict['extract']:
+            params_dict['extract']['schema'] = self._ensure_schema_dict(params_dict['extract']['schema'])
+        if 'jsonOptions' in params_dict and params_dict['jsonOptions'] and 'schema' in params_dict['jsonOptions']:
+            params_dict['jsonOptions']['schema'] = self._ensure_schema_dict(params_dict['jsonOptions']['schema'])
 
         # Make request
         headers = self._prepare_headers(idempotency_key)
@@ -1593,7 +1642,7 @@ class FirecrawlApp:
             id (str): The ID of the crawl job.
 
         Returns:
-            CrawlErrorsResponse: A response containing:
+            CrawlErrorsResponse containing:
             * errors (List[Dict[str, str]]): List of errors with fields:
               * id (str): Error ID
               * timestamp (str): When the error occurred
@@ -1656,10 +1705,7 @@ class FirecrawlApp:
             raise ValueError("Either urls or prompt is required")
 
         if schema:
-            if hasattr(schema, 'model_json_schema'):
-                # Convert Pydantic model to JSON schema
-                schema = schema.model_json_schema()
-            # Otherwise assume it's already a JSON schema dict
+            schema = self._ensure_schema_dict(schema)
 
         request_data = {
             'urls': urls or [],
@@ -1788,10 +1834,7 @@ class FirecrawlApp:
         
         schema = schema
         if schema:
-            if hasattr(schema, 'model_json_schema'):
-                # Convert Pydantic model to JSON schema
-                schema = schema.model_json_schema()
-            # Otherwise assume it's already a JSON schema dict
+            schema = self._ensure_schema_dict(schema)
 
         request_data = {
             'urls': urls,
@@ -2423,7 +2466,7 @@ class FirecrawlApp:
         method_params = {
             "scrape_url": {"formats", "include_tags", "exclude_tags", "only_main_content", "wait_for", 
                           "timeout", "location", "mobile", "skip_tls_verification", "remove_base64_images",
-                          "block_ads", "proxy", "extract", "json_options", "actions"},
+                          "block_ads", "proxy", "extract", "json_options", "actions", "change_tracking_options"},
             "search": {"limit", "tbs", "filter", "lang", "country", "location", "timeout", "scrape_options"},
             "crawl_url": {"include_paths", "exclude_paths", "max_depth", "max_discovery_depth", "limit",
                          "allow_backward_links", "allow_external_links", "ignore_sitemap", "scrape_options",
@@ -2432,15 +2475,15 @@ class FirecrawlApp:
             "batch_scrape_urls": {"formats", "headers", "include_tags", "exclude_tags", "only_main_content",
                                  "wait_for", "timeout", "location", "mobile", "skip_tls_verification",
                                  "remove_base64_images", "block_ads", "proxy", "extract", "json_options",
-                                 "actions", "agent"},
+                                 "actions", "agent", "webhook"},
             "async_batch_scrape_urls": {"formats", "headers", "include_tags", "exclude_tags", "only_main_content",
                                        "wait_for", "timeout", "location", "mobile", "skip_tls_verification",
                                        "remove_base64_images", "block_ads", "proxy", "extract", "json_options",
-                                       "actions", "agent"},
+                                       "actions", "agent", "webhook"},
             "batch_scrape_urls_and_watch": {"formats", "headers", "include_tags", "exclude_tags", "only_main_content",
                                            "wait_for", "timeout", "location", "mobile", "skip_tls_verification",
                                            "remove_base64_images", "block_ads", "proxy", "extract", "json_options",
-                                           "actions", "agent"}
+                                           "actions", "agent", "webhook"}
         }
 
         # Get allowed parameters for this method
@@ -2453,6 +2496,24 @@ class FirecrawlApp:
 
         # Additional type validation can be added here if needed
         # For now, we rely on Pydantic models for detailed type validation
+
+    def _ensure_schema_dict(self, schema):
+        """
+        Utility to ensure a schema is a dict, not a Pydantic model class. Recursively checks dicts and lists.
+        """
+        if schema is None:
+            return schema
+        if isinstance(schema, type):
+            # Pydantic v1/v2 model class
+            if hasattr(schema, 'model_json_schema'):
+                return schema.model_json_schema()
+            elif hasattr(schema, 'schema'):
+                return schema.schema()
+        if isinstance(schema, dict):
+            return {k: self._ensure_schema_dict(v) for k, v in schema.items()}
+        if isinstance(schema, (list, tuple)):
+            return [self._ensure_schema_dict(v) for v in schema]
+        return schema
 
 class CrawlWatcher:
     """
@@ -2860,18 +2921,23 @@ class AsyncFirecrawlApp(FirecrawlApp):
             scrape_params['blockAds'] = block_ads
         if proxy:
             scrape_params['proxy'] = proxy
-        if extract:
-            extract_dict = extract.dict(exclude_none=True)
-            if 'schema' in extract_dict and hasattr(extract.schema, 'schema'):
-                extract_dict['schema'] = extract.schema.schema() # Ensure pydantic model schema is converted
-            scrape_params['extract'] = extract_dict
-        if json_options:
-            json_options_dict = json_options.dict(exclude_none=True)
-            if 'schema' in json_options_dict and hasattr(json_options.schema, 'schema'):
-                 json_options_dict['schema'] = json_options.schema.schema() # Ensure pydantic model schema is converted
-            scrape_params['jsonOptions'] = json_options_dict
+        if extract is not None:
+            extract = self._ensure_schema_dict(extract)
+            if isinstance(extract, dict) and "schema" in extract:
+                extract["schema"] = self._ensure_schema_dict(extract["schema"])
+            scrape_params['extract'] = extract if isinstance(extract, dict) else extract.dict(exclude_none=True)
+        if json_options is not None:
+            json_options = self._ensure_schema_dict(json_options)
+            if isinstance(json_options, dict) and "schema" in json_options:
+                json_options["schema"] = self._ensure_schema_dict(json_options["schema"])
+            scrape_params['jsonOptions'] = json_options if isinstance(json_options, dict) else json_options.dict(exclude_none=True)
         if actions:
-            scrape_params['actions'] = [action.dict(exclude_none=True) for action in actions]
+            scrape_params['actions'] = [action if isinstance(action, dict) else action.dict(exclude_none=True) for action in actions]
+
+        if 'extract' in scrape_params and scrape_params['extract'] and 'schema' in scrape_params['extract']:
+            scrape_params['extract']['schema'] = self._ensure_schema_dict(scrape_params['extract']['schema'])
+        if 'jsonOptions' in scrape_params and scrape_params['jsonOptions'] and 'schema' in scrape_params['jsonOptions']:
+            scrape_params['jsonOptions']['schema'] = self._ensure_schema_dict(scrape_params['jsonOptions']['schema'])
 
         # Make async request
         endpoint = f'/v1/scrape'
@@ -2983,13 +3049,15 @@ class AsyncFirecrawlApp(FirecrawlApp):
         if proxy is not None:
             scrape_params['proxy'] = proxy
         if extract is not None:
-            if hasattr(extract.schema, 'schema'):
-                extract.schema = extract.schema.schema()
-            scrape_params['extract'] = extract.dict(exclude_none=True)
+            extract = self._ensure_schema_dict(extract)
+            if isinstance(extract, dict) and "schema" in extract:
+                extract["schema"] = self._ensure_schema_dict(extract["schema"])
+            scrape_params['extract'] = extract if isinstance(extract, dict) else extract.dict(exclude_none=True)
         if json_options is not None:
-            if hasattr(json_options.schema, 'schema'):
-                json_options.schema = json_options.schema.schema()
-            scrape_params['jsonOptions'] = json_options.dict(exclude_none=True)
+            json_options = self._ensure_schema_dict(json_options)
+            if isinstance(json_options, dict) and "schema" in json_options:
+                json_options["schema"] = self._ensure_schema_dict(json_options["schema"])
+            scrape_params['jsonOptions'] = json_options if isinstance(json_options, dict) else json_options.dict(exclude_none=True)
         if actions is not None:
             scrape_params['actions'] = [action.dict(exclude_none=True) for action in actions]
         if agent is not None:
@@ -3003,6 +3071,11 @@ class AsyncFirecrawlApp(FirecrawlApp):
         params_dict = final_params.dict(exclude_none=True)
         params_dict['urls'] = urls
         params_dict['origin'] = f"python-sdk@{version}"
+
+        if 'extract' in params_dict and params_dict['extract'] and 'schema' in params_dict['extract']:
+            params_dict['extract']['schema'] = self._ensure_schema_dict(params_dict['extract']['schema'])
+        if 'jsonOptions' in params_dict and params_dict['jsonOptions'] and 'schema' in params_dict['jsonOptions']:
+            params_dict['jsonOptions']['schema'] = self._ensure_schema_dict(params_dict['jsonOptions']['schema'])
 
         # Make request
         headers = self._prepare_headers(idempotency_key)
@@ -3114,13 +3187,15 @@ class AsyncFirecrawlApp(FirecrawlApp):
         if proxy is not None:
             scrape_params['proxy'] = proxy
         if extract is not None:
-            if hasattr(extract.schema, 'schema'):
-                extract.schema = extract.schema.schema()
-            scrape_params['extract'] = extract.dict(exclude_none=True)
+            extract = self._ensure_schema_dict(extract)
+            if isinstance(extract, dict) and "schema" in extract:
+                extract["schema"] = self._ensure_schema_dict(extract["schema"])
+            scrape_params['extract'] = extract if isinstance(extract, dict) else extract.dict(exclude_none=True)
         if json_options is not None:
-            if hasattr(json_options.schema, 'schema'):
-                json_options.schema = json_options.schema.schema()
-            scrape_params['jsonOptions'] = json_options.dict(exclude_none=True)
+            json_options = self._ensure_schema_dict(json_options)
+            if isinstance(json_options, dict) and "schema" in json_options:
+                json_options["schema"] = self._ensure_schema_dict(json_options["schema"])
+            scrape_params['jsonOptions'] = json_options if isinstance(json_options, dict) else json_options.dict(exclude_none=True)
         if actions is not None:
             scrape_params['actions'] = [action.dict(exclude_none=True) for action in actions]
         if agent is not None:
@@ -3134,6 +3209,11 @@ class AsyncFirecrawlApp(FirecrawlApp):
         params_dict = final_params.dict(exclude_none=True)
         params_dict['urls'] = urls
         params_dict['origin'] = f"python-sdk@{version}"
+
+        if 'extract' in params_dict and params_dict['extract'] and 'schema' in params_dict['extract']:
+            params_dict['extract']['schema'] = self._ensure_schema_dict(params_dict['extract']['schema'])
+        if 'jsonOptions' in params_dict and params_dict['jsonOptions'] and 'schema' in params_dict['jsonOptions']:
+            params_dict['jsonOptions']['schema'] = self._ensure_schema_dict(params_dict['jsonOptions']['schema'])
 
         # Make request
         headers = self._prepare_headers(idempotency_key)
@@ -3168,6 +3248,7 @@ class AsyncFirecrawlApp(FirecrawlApp):
         deduplicate_similar_urls: Optional[bool] = None,
         ignore_query_parameters: Optional[bool] = None,
         regex_on_full_url: Optional[bool] = None,
+        delay: Optional[int] = None,
         poll_interval: Optional[int] = 2,
         idempotency_key: Optional[str] = None,
         **kwargs
@@ -3190,6 +3271,7 @@ class AsyncFirecrawlApp(FirecrawlApp):
             deduplicate_similar_urls (Optional[bool]): Remove similar URLs
             ignore_query_parameters (Optional[bool]): Ignore URL parameters
             regex_on_full_url (Optional[bool]): Apply regex to full URLs
+            delay (Optional[int]): Delay in seconds between scrapes
             poll_interval (Optional[int]): Seconds between status checks (default: 2)
             idempotency_key (Optional[str]): Unique key to prevent duplicate requests
             **kwargs: Additional parameters to pass to the API
@@ -3235,6 +3317,8 @@ class AsyncFirecrawlApp(FirecrawlApp):
             crawl_params['ignoreQueryParameters'] = ignore_query_parameters
         if regex_on_full_url is not None:
             crawl_params['regexOnFullURL'] = regex_on_full_url
+        if delay is not None:
+            crawl_params['delay'] = delay
 
         # Add any additional kwargs
         crawl_params.update(kwargs)
@@ -3276,6 +3360,7 @@ class AsyncFirecrawlApp(FirecrawlApp):
         deduplicate_similar_urls: Optional[bool] = None,
         ignore_query_parameters: Optional[bool] = None,
         regex_on_full_url: Optional[bool] = None,
+        delay: Optional[int] = None,
         poll_interval: Optional[int] = 2,
         idempotency_key: Optional[str] = None,
         **kwargs
@@ -3340,6 +3425,8 @@ class AsyncFirecrawlApp(FirecrawlApp):
             crawl_params['ignoreQueryParameters'] = ignore_query_parameters
         if regex_on_full_url is not None:
             crawl_params['regexOnFullURL'] = regex_on_full_url
+        if delay is not None:
+            crawl_params['delay'] = delay
 
         # Add any additional kwargs
         crawl_params.update(kwargs)
@@ -3592,10 +3679,7 @@ class AsyncFirecrawlApp(FirecrawlApp):
             raise ValueError("Either urls or prompt is required")
 
         if schema:
-            if hasattr(schema, 'model_json_schema'):
-                # Convert Pydantic model to JSON schema
-                schema = schema.model_json_schema()
-            # Otherwise assume it's already a JSON schema dict
+            schema = self._ensure_schema_dict(schema)
 
         request_data = {
             'urls': urls or [],
@@ -3849,8 +3933,7 @@ class AsyncFirecrawlApp(FirecrawlApp):
             raise ValueError("Either urls or prompt is required")
 
         if schema:
-            if hasattr(schema, 'model_json_schema'):
-                schema = schema.model_json_schema()
+            schema = self._ensure_schema_dict(schema)
 
         request_data = ExtractResponse(
             urls=urls or [],

@@ -23,6 +23,8 @@ import { addScrapeJobs } from "../../services/queue-jobs";
 import { callWebhook } from "../../services/webhook";
 import { logger as _logger } from "../../lib/logger";
 import { CostTracking } from "../../lib/extract/extraction-service";
+import { BLOCKLISTED_URL_MESSAGE } from "../../lib/strings";
+import { isUrlBlocked } from "../../scraper/WebScraper/utils/blocklist";  
 
 export async function batchScrapeController(
   req: RequestWithAuth<{}, BatchScrapeResponse, BatchScrapeRequest>,
@@ -54,9 +56,22 @@ export async function batchScrapeController(
     for (const u of pendingURLs) {
       try {
         const nu = urlSchema.parse(u);
-        urls.push(nu);
+        if (!isUrlBlocked(nu, req.acuc?.flags ?? null)) {
+          urls.push(nu);
+        } else {
+          invalidURLs.push(u);
+        }
       } catch (_) {
         invalidURLs.push(u);
+      }
+    }
+  } else {
+    if (req.body.urls?.some((url: string) => isUrlBlocked(url, req.acuc?.flags ?? null))) {
+      if (!res.headersSent) {
+        return res.status(403).json({
+          success: false,
+          error: BLOCKLISTED_URL_MESSAGE,
+        });
       }
     }
   }
@@ -82,7 +97,11 @@ export async function batchScrapeController(
     : {
         crawlerOptions: null,
         scrapeOptions: req.body,
-        internalOptions: { disableSmartWaitCache: true, teamId: req.auth.team_id }, // NOTE: smart wait disabled for batch scrapes to ensure contentful scrape, speed does not matter
+        internalOptions: {
+          disableSmartWaitCache: true,
+          teamId: req.auth.team_id,
+          saveScrapeResultToGCS: process.env.GCS_FIRE_ENGINE_BUCKET_NAME ? true : false,
+        }, // NOTE: smart wait disabled for batch scrapes to ensure contentful scrape, speed does not matter
         team_id: req.auth.team_id,
         createdAt: Date.now(),
       };
@@ -121,6 +140,9 @@ export async function batchScrapeController(
         sitemapped: true,
         v1: true,
         webhook: req.body.webhook,
+        internalOptions: {
+          saveScrapeResultToGCS: process.env.GCS_FIRE_ENGINE_BUCKET_NAME ? true : false,
+        },
       },
       opts: {
         jobId: uuidv4(),
