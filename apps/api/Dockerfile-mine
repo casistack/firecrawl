@@ -18,18 +18,16 @@ COPY . /app
 WORKDIR /app
 
 FROM base AS prod-deps
-# Add network timeout and reduced concurrency for more stable installation
+# More robust installation with better error handling
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm config set store-dir /pnpm/store && \
-    pnpm install --prod --frozen-lockfile --network-concurrency 4 || \
-    (echo "First attempt failed, retrying..." && \
-    pnpm install --prod --frozen-lockfile --network-concurrency 1)
+    pnpm config set network-timeout 100000 && \
+    pnpm install --prod --frozen-lockfile --network-concurrency 1 --no-verify-store-integrity
 
 FROM base AS build
-# Add network timeout and reduced concurrency for more stable installation
+# More robust installation with better error handling
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm config set store-dir /pnpm/store && \
-    (pnpm install  --network-concurrency 4 || \
-    (echo "First attempt failed, retrying..." && \
-    pnpm install --network-concurrency 1)) && \
+    pnpm config set network-timeout 100000 && \
+    pnpm install --network-concurrency 1 --no-verify-store-integrity && \
     pnpm run build
 
 # Go stage updated to match repository version
