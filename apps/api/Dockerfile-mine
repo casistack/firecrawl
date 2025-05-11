@@ -18,15 +18,17 @@ COPY . /app
 WORKDIR /app
 
 FROM base AS prod-deps
-# More robust installation with better error handling
-RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm config set store-dir /pnpm/store && \
-    pnpm config set network-timeout 100000 && \
+# Completely bypass BuildKit cache mechanism to avoid JSON corruption
+RUN mkdir -p /tmp/pnpm-store && \
+    pnpm config set store-dir /tmp/pnpm-store && \
+    pnpm config set network-timeout 300000 && \
     pnpm install --prod --frozen-lockfile --network-concurrency 1 --no-verify-store-integrity
 
 FROM base AS build
-# More robust installation with better error handling
-RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm config set store-dir /pnpm/store && \
-    pnpm config set network-timeout 100000 && \
+# Completely bypass BuildKit cache mechanism to avoid JSON corruption
+RUN mkdir -p /tmp/pnpm-store && \
+    pnpm config set store-dir /tmp/pnpm-store && \
+    pnpm config set network-timeout 300000 && \
     pnpm install --network-concurrency 1 --no-verify-store-integrity && \
     pnpm run build
 
