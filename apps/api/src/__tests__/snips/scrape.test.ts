@@ -77,24 +77,24 @@ describe("Scrape tests", () => {
       expect(JSON.stringify(status)).toBe(JSON.stringify(response));
     }, 60000);
     
-    // describe("Ad blocking (f-e dependant)", () => {
-    //   it.concurrent("blocks ads by default", async () => {
-    //     const response = await scrape({
-    //       url: "https://www.allrecipes.com/recipe/18185/yum/",
-    //     });
+    describe("Ad blocking (f-e dependant)", () => {
+      it.concurrent("blocks ads by default", async () => {
+        const response = await scrape({
+          url: "https://www.allrecipes.com/recipe/18185/yum/",
+        });
 
-    //     expect(response.markdown).not.toContain(".g.doubleclick.net/");
-    //   }, 30000);
+        expect(response.markdown).not.toContain(".g.doubleclick.net/");
+      }, 30000);
 
-    //   it.concurrent("doesn't block ads if explicitly disabled", async () => {
-    //     const response = await scrape({
-    //       url: "https://www.allrecipes.com/recipe/18185/yum/",
-    //       blockAds: false,
-    //     });
+      it.concurrent("doesn't block ads if explicitly disabled", async () => {
+        const response = await scrape({
+          url: "https://www.allrecipes.com/recipe/18185/yum/",
+          blockAds: false,
+        });
 
-    //     expect(response.markdown).toMatch(/(\.g\.doubleclick\.net|amazon-adsystem\.com)\//);
-    //   }, 30000);
-    // });
+        expect(response.markdown).toMatch(/(\.g\.doubleclick\.net|amazon-adsystem\.com)\//);
+      }, 30000);
+    });
 
     describe("Change Tracking format", () => {
       it.concurrent("works", async () => {
@@ -366,4 +366,21 @@ describe("Scrape tests", () => {
       }, 30000);
     });
   }
+
+  it.concurrent("sourceURL stays unnormalized", async () => {
+    const response = await scrape({
+      url: "https://firecrawl.dev/?pagewanted=all&et_blog",
+    });
+
+    expect(response.metadata.sourceURL).toBe("https://firecrawl.dev/?pagewanted=all&et_blog");
+  }, 30000);
+
+  it.concurrent("application/json content type is markdownified properly", async () => {
+    const response = await scrape({
+      url: "https://jsonplaceholder.typicode.com/todos/1",
+      formats: ["markdown"],
+    });
+
+    expect(response.markdown).toContain("```json");
+  }, 30000);
 });
