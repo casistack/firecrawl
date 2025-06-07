@@ -7,10 +7,14 @@ services:
       dockerfile: Dockerfile-mine
     ports:
       - "3002"
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
     environment:
       - REDIS_URL=redis://redis:6379
       - REDIS_RATE_LIMIT_URL=redis://redis:6379
-      - PLAYWRIGHT_MICROSERVICE_URL=http://playwright-service:3000
+      - PLAYWRIGHT_MICROSERVICE_URL=http://playwright-service:3000/scrape
       - USE_DB_AUTHENTICATION=${USE_DB_AUTHENTICATION:-false}
       - PORT=3002
       - NUM_WORKERS_PER_QUEUE=${NUM_WORKERS_PER_QUEUE:-1}
@@ -49,10 +53,14 @@ services:
     build:
       context: ./apps/api
       dockerfile: Dockerfile-mine
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
     environment:
       - REDIS_URL=redis://redis:6379
       - REDIS_RATE_LIMIT_URL=redis://redis:6379
-      - PLAYWRIGHT_MICROSERVICE_URL=http://playwright-service:3000
+      - PLAYWRIGHT_MICROSERVICE_URL=http://playwright-service:3000/scrape
       - USE_DB_AUTHENTICATION=${USE_DB_AUTHENTICATION:-false}
       - NUM_WORKERS_PER_QUEUE=${NUM_WORKERS_PER_QUEUE:-1}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
