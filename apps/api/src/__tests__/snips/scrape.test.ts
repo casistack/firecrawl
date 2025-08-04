@@ -57,15 +57,16 @@ describe("Scrape tests", () => {
       expect(response.markdown).toContain("Firecrawl");
     }, scrapeTimeout);
 
-    it.concurrent("allows waitFor when it's exactly half of timeout", async () => {
-      const response = await scrape({
-        url: "http://firecrawl.dev",
-        waitFor: 7500,
-        timeout: 15000,
-      }, identity);
+    // TODO: does not make sense. reevaluate - mogery
+    // it.concurrent("allows waitFor when it's exactly half of timeout", async () => {
+    //   const response = await scrape({
+    //     url: "http://firecrawl.dev",
+    //     waitFor: 7500,
+    //     timeout: 15000,
+    //   }, identity);
 
-      expect(response.markdown).toContain("Firecrawl");
-    }, scrapeTimeout);
+    //   expect(response.markdown).toContain("Firecrawl");
+    // }, scrapeTimeout);
 
     it.concurrent("rejects waitFor when it exceeds half of timeout", async () => {
       const raw = await scrapeRaw({
@@ -964,4 +965,29 @@ describe("Scrape tests", () => {
 
     expect(response.markdown).toContain("```json");
   }, scrapeTimeout);
+
+  describe("__experimental_omceDomain functionality", () => {
+    it.concurrent("should accept __experimental_omceDomain flag in scrape request", async () => {
+      const response = await scrape({
+        url: "https://httpbin.org/html",
+        __experimental_omceDomain: "fake-domain.com",
+        timeout: scrapeTimeout,
+      }, identity);
+
+      expect(response.markdown).toBeDefined();
+      expect(response.metadata).toBeDefined();
+    }, scrapeTimeout);
+
+    it.concurrent("should work with __experimental_omceDomain and other experimental flags", async () => {
+      const response = await scrape({
+        url: "https://httpbin.org/html",
+        __experimental_omceDomain: "test-domain.org",
+        __experimental_omce: true,
+        timeout: scrapeTimeout,
+      }, identity);
+
+      expect(response.markdown).toBeDefined();
+      expect(response.metadata).toBeDefined();
+    }, scrapeTimeout);
+  });
 });

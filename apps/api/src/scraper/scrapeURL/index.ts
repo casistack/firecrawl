@@ -1,8 +1,8 @@
 import { Logger } from "winston";
 import * as Sentry from "@sentry/node";
 
-import { Document, ScrapeOptions, TimeoutSignal } from "../../controllers/v1/types";
-import { logger as _logger } from "../../lib/logger";
+import { Document, ScrapeOptions, TimeoutSignal, TeamFlags } from "../../controllers/v1/types";
+import { logger as _logger, logger } from "../../lib/logger";
 import {
   buildFallbackList,
   Engine,
@@ -35,6 +35,7 @@ import { urlSpecificParams } from "./lib/urlSpecificParams";
 import { loadMock, MockState } from "./lib/mock";
 import { CostTracking } from "../../lib/extract/extraction-service";
 import { addIndexRFInsertJob, generateDomainSplits, hashURL, index_supabase_service, normalizeURLForIndex, useIndex } from "../../services/index";
+import { checkRobotsTxt } from "../../lib/robots-txt";
 
 export type ScrapeUrlResponse = (
   | {
@@ -180,6 +181,9 @@ async function buildMetaObject(
     scrapeId: id,
     scrapeURL: url,
     zeroDataRetention: internalOptions.zeroDataRetention,
+    teamId: internalOptions.teamId,
+    team_id: internalOptions.teamId,
+    crawlId: internalOptions.crawlId,
   });
   const logs: any[] = [];
 
@@ -204,6 +208,7 @@ async function buildMetaObject(
 
 export type InternalOptions = {
   teamId: string;
+  crawlId?: string;
 
   priority?: number; // Passed along to fire-engine
   forceEngine?: Engine | Engine[];
@@ -220,6 +225,7 @@ export type InternalOptions = {
   saveScrapeResultToGCS?: boolean; // Passed along to fire-engine
   bypassBilling?: boolean;
   zeroDataRetention?: boolean;
+  teamFlags?: TeamFlags;
 };
 
 export type EngineResultsTracker = {
@@ -501,11 +507,43 @@ export async function scrapeURL(
 ): Promise<ScrapeUrlResponse> {
   const meta = await buildMetaObject(id, url, options, internalOptions, costTracking);
 
+  meta.logger.info("scrapeURL entered");
+
   if (meta.rewrittenUrl) {
     meta.logger.info("Rewriting URL");
   }
 
-  const shouldRecordFrequency = useIndex && meta.options.storeInCache && !meta.internalOptions.zeroDataRetention;
+  if (internalOptions.teamFlags?.checkRobotsOnScrape) {
+    meta.logger.info("Checking robots.txt", {
+      checkRobotsOnScrape: internalOptions.teamFlags?.checkRobotsOnScrape,
+      url: meta.rewrittenUrl || meta.url,
+    });
+    const urlToCheck = meta.rewrittenUrl || meta.url;
+    const isAllowed = await checkRobotsTxt(
+      urlToCheck, 
+      options.skipTlsVerification, 
+      meta.logger,
+      internalOptions.abort
+    );
+
+    
+    if (!isAllowed) {
+      meta.logger.info("URL blocked by robots.txt", { url: urlToCheck });
+      return {
+        success: false,
+        error: new Error("URL blocked by robots.txt"),
+        logs: meta.logs,
+        engines: meta.results,
+      };
+    }
+  }
+
+  meta.logger.info("Pre-recording frequency");
+  
+  const shouldRecordFrequency = useIndex
+    && meta.options.storeInCache
+    && !meta.internalOptions.zeroDataRetention
+    && internalOptions.teamId !== process.env.PRECRAWL_TEAM_ID;
   if (shouldRecordFrequency) {
     (async () => {
       try {
@@ -528,7 +566,8 @@ export async function scrapeURL(
           ? Date.now() - new Date(data[0].created_at).getTime()
           : -1;
         
-        const domainSplits = generateDomainSplits(new URL(normalizeURLForIndex(meta.url)).hostname);
+        const fakeDomain = meta.options.__experimental_omceDomain;
+        const domainSplits = generateDomainSplits(new URL(normalizeURLForIndex(meta.url)).hostname, fakeDomain);
         const domainHash = hashURL(domainSplits.slice(-1)[0]);
 
         const out = {

@@ -200,6 +200,10 @@ export async function finishCrawl(id: string, __logger: Logger = _logger) {
     await redisEvictConnection.srem("crawls_by_team_id:" + crawl.team_id, id);
     await redisEvictConnection.expire("crawls_by_team_id:" + crawl.team_id, 24 * 60 * 60);
   }
+
+  // Clear visited sets to save memory
+  await redisEvictConnection.del("crawl:" + id + ":visited");
+  await redisEvictConnection.del("crawl:" + id + ":visited_unique");
 }
 
 export async function getCrawlJobs(id: string): Promise<string[]> {
@@ -212,7 +216,7 @@ export async function getCrawlJobCount(id: string): Promise<number> {
 
 export function normalizeURL(url: string, sc: StoredCrawl): string {
   const urlO = new URL(url);
-  if (!sc.crawlerOptions || sc.crawlerOptions.ignoreQueryParameters) {
+  if (sc && sc.crawlerOptions && sc.crawlerOptions.ignoreQueryParameters) {
     urlO.search = "";
   }
   urlO.hash = "";
@@ -283,6 +287,8 @@ export async function lockURL(
   sc: StoredCrawl,
   url: string,
 ): Promise<boolean> {
+  url = normalizeURL(url, sc);
+  
   if (typeof sc.crawlerOptions?.limit === "number") {
     if (
       (await redisEvictConnection.scard("crawl:" + id + ":visited_unique")) >=

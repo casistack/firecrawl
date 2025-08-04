@@ -84,7 +84,6 @@ export async function deriveDiff(meta: Meta, document: Document): Promise<Docume
     const job: {
         returnvalue: Document,
     } | null = data?.o_job_id ? await getJob(data.o_job_id) : null;
-
     if (data && job && job?.returnvalue) {
         const previousMarkdown = job.returnvalue.markdown!;
         const currentMarkdown = document.markdown!;
