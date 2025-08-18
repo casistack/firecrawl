@@ -25,6 +25,8 @@ import {
   toLegacyDocument,
 } from "../v1/types";
 import { getJobFromGCS } from "../../lib/gcs-jobs";
+import { fromV0Combo } from "../v2/types";
+import { ScrapeJobTimeoutError } from "../../lib/error";
 
 export async function searchHelper(
   jobId: string,
@@ -70,7 +72,7 @@ export async function searchHelper(
 
   let justSearch = pageOptions.fetchPageContent === false;
 
-  const { scrapeOptions, internalOptions } = fromLegacyCombo(
+  const { scrapeOptions, internalOptions } = fromV0Combo(
     pageOptions,
     undefined,
     60000,
@@ -174,9 +176,14 @@ export async function searchController(req: Request, res: Response) {
       return res.status(400).json({ error: "Your team has zero data retention enabled. This is not supported on the v0 API. Please update your code to use the v1 API." });
     }
 
+    const jobId = uuidv4();
+
     redisEvictConnection.sadd("teams_using_v0", team_id)
       .catch(error => logger.error("Failed to add team to teams_using_v0", { error, team_id }));
     
+    redisEvictConnection.sadd("teams_using_v0:" + team_id, "search:" + jobId)
+      .catch(error => logger.error("Failed to add team to teams_using_v0 (2)", { error, team_id }));
+
     const crawlerOptions = req.body.crawlerOptions ?? {};
     const pageOptions = req.body.pageOptions ?? {
       includeHtml: req.body.pageOptions?.includeHtml ?? false,
@@ -188,8 +195,6 @@ export async function searchController(req: Request, res: Response) {
     const origin = req.body.origin ?? "api";
 
     const searchOptions = req.body.searchOptions ?? { limit: 5 };
-
-    const jobId = uuidv4();
 
     try {
       const { success: creditsCheckSuccess, message: creditsCheckMessage } =
@@ -233,11 +238,8 @@ export async function searchController(req: Request, res: Response) {
     });
     return res.status(result.returnCode).json(result);
   } catch (error) {
-    if (
-      error instanceof Error &&
-      (error.message.startsWith("Job wait") || error.message === "timeout")
-    ) {
-      return res.status(408).json({ error: "Request timed out" });
+    if (error instanceof ScrapeJobTimeoutError) {
+      return res.status(408).json({ error: error.message });
     }
 
     Sentry.captureException(error);
