@@ -6,10 +6,12 @@ export type FormatString =
   | "html"
   | "rawHtml"
   | "links"
+  | "images"
   | "screenshot"
   | "summary"
   | "changeTracking"
-  | "json";
+  | "json"
+  | "attributes";
 
 export interface Viewport {
   width: number;
@@ -40,13 +42,21 @@ export interface ChangeTrackingFormat extends Format {
   prompt?: string;
   tag?: string;
 }
+export interface AttributesFormat extends Format {
+  type: "attributes";
+  selectors: Array<{
+    selector: string;
+    attribute: string;
+  }>;
+}
 
 export type FormatOption =
   | FormatString
   | Format
   | JsonFormat
   | ChangeTrackingFormat
-  | ScreenshotFormat;
+  | ScreenshotFormat
+  | AttributesFormat;
 
 export interface LocationConfig {
   country?: string;
@@ -167,33 +177,82 @@ export interface Document {
   summary?: string;
   metadata?: DocumentMetadata;
   links?: string[];
+  images?: string[];
   screenshot?: string;
+  attributes?: Array<{
+    selector: string;
+    attribute: string;
+    values: string[];
+  }>;
   actions?: Record<string, unknown>;
   warning?: string;
   changeTracking?: Record<string, unknown>;
 }
 
-export interface SearchResult {
+export interface SearchResultWeb {
   url: string;
   title?: string;
   description?: string;
+  category?: string;
+}
+
+export interface SearchResultNews {
+  title?: string;
+  url?: string;
+  snippet?: string;
+  date?: string;
+  imageUrl?: string;
+  position?: number;
+  category?: string;
+}
+
+export interface SearchResultImages {
+  title?: string;
+  imageUrl?: string;
+  imageWidth?: number;
+  imageHeight?: number;
+  url?: string;
+  position?: number;
 }
 
 export interface SearchData {
-  web?: Array<SearchResult | Document>;
-  news?: Array<SearchResult | Document>;
-  images?: Array<SearchResult | Document>;
+  web?: Array<SearchResultWeb | Document>;
+  news?: Array<SearchResultNews | Document>;
+  images?: Array<SearchResultImages | Document>;
+}
+
+export interface CategoryOption {
+  type: "github" | "research";
 }
 
 export interface SearchRequest {
   query: string;
   sources?: Array<"web" | "news" | "images" | { type: "web" | "news" | "images" }>;
+  categories?: Array<"github" | "research" | CategoryOption>;
   limit?: number;
   tbs?: string;
   location?: string;
   ignoreInvalidURLs?: boolean;
   timeout?: number; // ms
   scrapeOptions?: ScrapeOptions;
+}
+
+export interface CrawlOptions {
+  prompt?: string | null;
+  excludePaths?: string[] | null;
+  includePaths?: string[] | null;
+  maxDiscoveryDepth?: number | null;
+  sitemap?: "skip" | "include";
+  ignoreQueryParameters?: boolean;
+  limit?: number | null;
+  crawlEntireDomain?: boolean;
+  allowExternalLinks?: boolean;
+  allowSubdomains?: boolean;
+  delay?: number | null;
+  maxConcurrency?: number | null;
+  webhook?: string | WebhookConfig | null;
+  scrapeOptions?: ScrapeOptions | null;
+  zeroDataRetention?: boolean;
 }
 
 export interface CrawlResponse {
@@ -209,6 +268,17 @@ export interface CrawlJob {
   expiresAt?: string;
   next?: string | null;
   data: Document[];
+}
+
+export interface BatchScrapeOptions {
+  options?: ScrapeOptions;
+  webhook?: string | WebhookConfig;
+  appendToId?: string;
+  ignoreInvalidURLs?: boolean;
+  maxConcurrency?: number;
+  zeroDataRetention?: boolean;
+  integration?: string;
+  idempotencyKey?: string;
 }
 
 export interface BatchScrapeResponse {
@@ -228,7 +298,7 @@ export interface BatchScrapeJob {
 }
 
 export interface MapData {
-  links: SearchResult[];
+  links: SearchResultWeb[];
 }
 
 export interface MapOptions {

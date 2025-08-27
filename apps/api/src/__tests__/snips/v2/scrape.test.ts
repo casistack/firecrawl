@@ -120,6 +120,39 @@ describe("Scrape tests", () => {
     expect(response.links?.length).toBeGreaterThan(0);
   });
 
+  it.concurrent("images format works", async () => {
+    const response = await scrape({
+      url: "https://firecrawl.dev",
+      formats: ["images"],
+    }, identity);
+
+    expect(response.images).toBeDefined();
+    expect(response.images?.length).toBeGreaterThan(0);
+    // Firecrawl website should have at least the logo
+    expect(response.images?.some(img => img.includes("firecrawl"))).toBe(true);
+  });
+
+  it.concurrent("images format works with multiple formats", async () => {
+    const response = await scrape({
+      url: "https://firecrawl.dev",
+      formats: ["markdown", "links", "images"],
+    }, identity);
+
+    expect(response.markdown).toBeDefined();
+    expect(response.links).toBeDefined();
+    expect(response.images).toBeDefined();
+    expect(response.images?.length).toBeGreaterThan(0);
+    
+    // Images should include things that aren't in links
+    const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.ico'];
+    const linkImages = response.links?.filter(link => 
+      imageExtensions.some(ext => link.toLowerCase().includes(ext))
+    ) || [];
+    
+    // Should have found more images than just those with obvious extensions in links
+    expect(response.images?.length).toBeGreaterThanOrEqual(linkImages.length);
+  });
+
   if (process.env.TEST_SUITE_SELF_HOSTED && process.env.PROXY_SERVER) {
     it.concurrent("self-hosted proxy works", async () => {
       const response = await scrape({
@@ -967,4 +1000,74 @@ describe("Scrape tests", () => {
       expect(response.metadata).toBeDefined();
     }, scrapeTimeout);
   });
+});
+
+describe("attributes format", () => {
+  it.concurrent("should extract attributes from HTML elements", async () => {
+    const response = await scrape({
+      url: "https://news.ycombinator.com",
+      formats: [
+        { type: "markdown" },
+        {
+          type: "attributes",
+          selectors: [
+            { selector: ".athing", attribute: "id" }
+          ]
+        }
+      ]
+    }, identity);
+
+    expect(response.markdown).toBeDefined();
+    expect(response.attributes).toBeDefined();
+    expect(Array.isArray(response.attributes)).toBe(true);
+    expect(response.attributes!.length).toBe(1);
+    expect(response.attributes![0]).toEqual({
+      selector: ".athing",
+      attribute: "id",
+      values: expect.any(Array)
+    });
+    expect(response.attributes![0].values.length).toBeGreaterThan(0);
+  }, scrapeTimeout);
+
+  it.concurrent("should handle multiple attribute selectors", async () => {
+    const response = await scrape({
+      url: "https://github.com/microsoft/vscode",
+      formats: [
+        {
+          type: "attributes", 
+          selectors: [
+            { selector: "[data-testid]", attribute: "data-testid" },
+            { selector: "[data-view-component]", attribute: "data-view-component" }
+          ]
+        }
+      ]
+    }, identity);
+
+    expect(response.attributes).toBeDefined();
+    expect(Array.isArray(response.attributes)).toBe(true);
+    expect(response.attributes!.length).toBe(2);
+
+    const testIdResults = response.attributes!.find(a => a.attribute === "data-testid");
+    expect(testIdResults).toBeDefined();
+    expect(testIdResults!.selector).toBe("[data-testid]");
+  }, scrapeTimeout);
+
+  it.concurrent("should return empty arrays when no attributes found", async () => {
+    const response = await scrape({
+      url: "https://httpbin.org/html",
+      formats: [
+        {
+          type: "attributes",
+          selectors: [
+            { selector: ".nonexistent", attribute: "data-test" }
+          ]
+        }
+      ]
+    }, identity);
+
+    expect(response.attributes).toBeDefined();
+    expect(Array.isArray(response.attributes)).toBe(true);
+    expect(response.attributes!.length).toBe(1);
+    expect(response.attributes![0].values).toEqual([]);
+  }, scrapeTimeout);
 });
