@@ -133,7 +133,7 @@ export interface ScrapeOptions {
   timeout?: number;
   waitFor?: number;
   mobile?: boolean;
-  parsers?: string[];
+  parsers?: Array<string | { type: "pdf"; maxPages?: number }>;
   actions?: ActionOption[];
   location?: LocationConfig;
   skipTlsVerification?: boolean;
@@ -144,6 +144,7 @@ export interface ScrapeOptions {
   proxy?: "basic" | "stealth" | "auto" | string;
   maxAge?: number;
   storeInCache?: boolean;
+  integration?: string;
 }
 
 export interface WebhookConfig {
@@ -187,6 +188,18 @@ export interface Document {
   actions?: Record<string, unknown>;
   warning?: string;
   changeTracking?: Record<string, unknown>;
+}
+
+// Pagination configuration for auto-fetching pages from v2 endpoints that return a `next` URL
+export interface PaginationConfig {
+  /** When true (default), automatically follow `next` links and aggregate all documents. */
+  autoPaginate?: boolean;
+  /** Maximum number of additional pages to fetch after the first response. */
+  maxPages?: number;
+  /** Maximum total number of documents to return across all pages. */
+  maxResults?: number;
+  /** Maximum time to spend fetching additional pages (in seconds). */
+  maxWaitTime?: number;
 }
 
 export interface SearchResultWeb {
@@ -235,6 +248,7 @@ export interface SearchRequest {
   ignoreInvalidURLs?: boolean;
   timeout?: number; // ms
   scrapeOptions?: ScrapeOptions;
+  integration?: string;
 }
 
 export interface CrawlOptions {
@@ -253,6 +267,7 @@ export interface CrawlOptions {
   webhook?: string | WebhookConfig | null;
   scrapeOptions?: ScrapeOptions | null;
   zeroDataRetention?: boolean;
+  integration?: string;
 }
 
 export interface CrawlResponse {
@@ -277,8 +292,8 @@ export interface BatchScrapeOptions {
   ignoreInvalidURLs?: boolean;
   maxConcurrency?: number;
   zeroDataRetention?: boolean;
-  integration?: string;
   idempotencyKey?: string;
+  integration?: string;
 }
 
 export interface BatchScrapeResponse {
@@ -307,6 +322,8 @@ export interface MapOptions {
   includeSubdomains?: boolean;
   limit?: number;
   timeout?: number;
+  integration?: string;
+  location?: LocationConfig;
 }
 
 export interface ExtractResponse {
@@ -320,6 +337,10 @@ export interface ExtractResponse {
   expiresAt?: string;
 }
 
+export interface AgentOptions {
+  model: "FIRE-1";
+}
+
 export interface ConcurrencyCheck {
   concurrency: number;
   maxConcurrency: number;
@@ -327,10 +348,40 @@ export interface ConcurrencyCheck {
 
 export interface CreditUsage {
   remainingCredits: number;
+  planCredits?: number;
+  billingPeriodStart?: string | null;
+  billingPeriodEnd?: string | null;
 }
 
 export interface TokenUsage {
   remainingTokens: number;
+  planTokens?: number;
+  billingPeriodStart?: string | null;
+  billingPeriodEnd?: string | null;
+}
+
+export interface CreditUsageHistoricalPeriod {
+  startDate: string | null;
+  endDate: string | null;
+  apiKey?: string;
+  creditsUsed: number;
+}
+
+export interface CreditUsageHistoricalResponse {
+  success: boolean;
+  periods: CreditUsageHistoricalPeriod[];
+}
+
+export interface TokenUsageHistoricalPeriod {
+  startDate: string | null;
+  endDate: string | null;
+  apiKey?: string;
+  tokensUsed: number;
+}
+
+export interface TokenUsageHistoricalResponse {
+  success: boolean;
+  periods: TokenUsageHistoricalPeriod[];
 }
 
 export interface CrawlErrorsResponse {
@@ -376,3 +427,11 @@ export class SdkError extends Error {
   }
 }
 
+export interface QueueStatusResponse {
+  success: boolean;
+  jobsInQueue: number;
+  activeJobsInQueue: number;
+  waitingJobsInQueue: number;
+  maxConcurrency: number;
+  mostRecentSuccess: string | null;
+}

@@ -1,8 +1,8 @@
 // import { crawl, batchScrape, idmux, Identity } from "./lib";
 // import Express from "express";
 // import bodyParser from "body-parser";
-// import type { WebhookEventType } from "src/types";
-// import type { Document } from "src/controllers/v1/types";
+// import type { WebhookEventType } from "../../../types";
+// import type { Document } from "../../../controllers/v1/types";
 
 // const WEBHOOK_PORT_CRAWL = 3008;
 // const WEBHOOK_PORT_BATCH_SCRAPE = 3009;
@@ -49,7 +49,7 @@
 
 //         // wait to settle the webhook calls
 //         await new Promise(resolve => setTimeout(resolve, 1000));
-        
+
 //         server.close();
 
 //         let hasStarted = false;

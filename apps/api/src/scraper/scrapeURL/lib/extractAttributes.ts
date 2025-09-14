@@ -1,14 +1,14 @@
 import { load } from "cheerio";
 import { logger } from "../../../lib/logger";
-import { extractAttributesRust } from "../../../lib/html-transformer";
+import { extractAttributes as _extractAttributes } from "@mendable/firecrawl-rs";
 
-export type AttributeResult = {
+type AttributeResult = {
   selector: string;
   attribute: string;
   values: string[];
 };
 
-export type AttributeSelector = {
+type AttributeSelector = {
   selector: string;
   attribute: string;
 };
@@ -21,7 +21,7 @@ export type AttributeSelector = {
  */
 export async function extractAttributes(
   html: string,
-  selectors: AttributeSelector[]
+  selectors: AttributeSelector[],
 ): Promise<AttributeResult[]> {
   if (!selectors || selectors.length === 0) {
     return [];
@@ -29,7 +29,7 @@ export async function extractAttributes(
 
   // Try Rust implementation first (faster, non-blocking)
   try {
-    const results = await extractAttributesRust(html, selectors);
+    const results = await _extractAttributes(html, { selectors });
 
     logger.debug("Attribute extraction via Rust", {
       selectorsCount: selectors.length,
@@ -37,17 +37,20 @@ export async function extractAttributes(
       sampleResults: results.slice(0, 2).map(r => ({
         selector: r.selector,
         attribute: r.attribute,
-        valuesCount: r.values.length
-      }))
+        valuesCount: r.values.length,
+      })),
     });
 
     return results;
   } catch (error) {
-    logger.warn("Failed to extract attributes with Rust, falling back to Cheerio", {
-      error,
-      module: "scrapeURL",
-      method: "extractAttributes"
-    });
+    logger.warn(
+      "Failed to extract attributes with Rust, falling back to Cheerio",
+      {
+        error,
+        module: "scrapeURL",
+        method: "extractAttributes",
+      },
+    );
   }
 
   // Fallback to Cheerio implementation
@@ -67,7 +70,7 @@ export async function extractAttributes(
         let attrValue = $(element).attr(attribute);
 
         // If not found and attribute doesn't start with 'data-', try with 'data-' prefix
-        if (!attrValue && !attribute.startsWith('data-')) {
+        if (!attrValue && !attribute.startsWith("data-")) {
           attrValue = $(element).attr(`data-${attribute}`);
         }
 
@@ -79,21 +82,21 @@ export async function extractAttributes(
       results.push({
         selector,
         attribute,
-        values
+        values,
       });
 
       logger.debug("Attribute extraction via Cheerio fallback", {
         selector,
         attribute,
         valuesCount: values.length,
-        sample: values.slice(0, 3)
+        sample: values.slice(0, 3),
       });
     }
   } catch (error) {
     logger.error("Failed to extract attributes with Cheerio fallback", {
       error,
       module: "scrapeURL",
-      method: "extractAttributes"
+      method: "extractAttributes",
     });
   }
 

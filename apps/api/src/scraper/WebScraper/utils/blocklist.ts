@@ -8,15 +8,6 @@ configDotenv();
 const hashKey = Buffer.from(process.env.HASH_KEY || "", "utf-8");
 const algorithm = "aes-256-ecb";
 
-export function encryptAES(plaintext: string, key: Buffer): string {
-  const cipher = crypto.createCipheriv(algorithm, key, null);
-  const encrypted = Buffer.concat([
-    cipher.update(plaintext, "utf-8"),
-    cipher.final(),
-  ]);
-  return encrypted.toString("base64");
-}
-
 export function decryptAES(ciphertext: string, key: Buffer): string {
   const decipher = crypto.createDecipheriv(algorithm, key, null);
   const decrypted = Buffer.concat([
@@ -57,7 +48,6 @@ const urlBlocklist = [
   "Indtl4yxJMHCKBGF4KABCQ==",
   "e3HFXLVgxhaVoadYpwb2BA==",
   "b+asgLayXQ5Jq+se+q56jA==",
-  "86ZDUI7vmp4MvNq3fvZrGQ==",
   "sEGFoYZ6GEg4Zocd+TiyfQ==",
   "6OOL72eXthgnJ1Hj4PfOQQ==",
   "g/ME+Sh1CAFboKrwkVb+5Q==",
@@ -69,7 +59,7 @@ const urlBlocklist = [
   "l8GDVI8w/ueHnNzdN1ODuQ==",
   "+yz9bnYYMnC0trJZGJwf6Q==",
   "oTdhIjEjqdT2pEvyxD1Ssg==",
-]
+];
 
 const allowedKeywords = [
   "pulse",
@@ -102,9 +92,9 @@ const allowedKeywords = [
   "://www.aa.org",
 ];
 
-export function decryptedBlocklist(list: string[]): string[] {
+function decryptedBlocklist(list: string[]): string[] {
   return hashKey.length > 0
-    ? list.map((ciphertext) => decryptAES(ciphertext, hashKey))
+    ? list.map(ciphertext => decryptAES(ciphertext, hashKey))
     : [];
 }
 
@@ -114,12 +104,13 @@ export function isUrlBlocked(url: string, flags: TeamFlags): boolean {
   let blockedlist = decryptedBlocklist(urlBlocklist);
 
   if (flags?.unblockedDomains) {
-    blockedlist = blockedlist.filter((blocked) => !flags.unblockedDomains!.includes(blocked));
+    blockedlist = blockedlist.filter(
+      blocked => !flags.unblockedDomains!.includes(blocked),
+    );
   }
 
   const decryptedUrl =
-    blockedlist.find((decrypted) => lowerCaseUrl === decrypted) ||
-    lowerCaseUrl;
+    blockedlist.find(decrypted => lowerCaseUrl === decrypted) || lowerCaseUrl;
 
   // If the URL is empty or invalid, return false
   let parsedUrl: any;
@@ -139,7 +130,7 @@ export function isUrlBlocked(url: string, flags: TeamFlags): boolean {
 
   // Check if URL contains any allowed keyword
   if (
-    allowedKeywords.some((keyword) =>
+    allowedKeywords.some(keyword =>
       lowerCaseUrl.includes(keyword.toLowerCase()),
     )
   ) {
@@ -152,7 +143,7 @@ export function isUrlBlocked(url: string, flags: TeamFlags): boolean {
   }
 
   // Block subdomains
-  if (blockedlist.some((blocked) => domain.endsWith(`.${blocked}`))) {
+  if (blockedlist.some(blocked => domain.endsWith(`.${blocked}`))) {
     return true;
   }
 
@@ -161,7 +152,7 @@ export function isUrlBlocked(url: string, flags: TeamFlags): boolean {
   if (
     publicSuffix &&
     blockedlist.some(
-      (blocked) => blocked.startsWith(baseDomain + ".") && blocked !== domain,
+      blocked => blocked.startsWith(baseDomain + ".") && blocked !== domain,
     )
   ) {
     return true;
