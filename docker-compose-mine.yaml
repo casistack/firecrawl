@@ -18,6 +18,7 @@ services:
       - NUQ_DATABASE_URL=${NUQ_DATABASE_URL:-postgres://postgres:postgres@nuq-postgres:5432/postgres}
       - USE_DB_AUTHENTICATION=${USE_DB_AUTHENTICATION:-false}
       - PORT=3002
+      - WORKER_PORT=${WORKER_PORT:-3005}
       - NUM_WORKERS_PER_QUEUE=${NUM_WORKERS_PER_QUEUE:-1}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
