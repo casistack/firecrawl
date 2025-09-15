@@ -14,6 +14,14 @@ RUN apt-get update && \
     corepack enable && \
     corepack prepare pnpm@latest --activate
 
+# Install Rust for native library
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:$PATH
+
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path \
+    && chmod -R a+w $RUSTUP_HOME $CARGO_HOME
+
 COPY . /app
 WORKDIR /app
 
@@ -26,10 +34,12 @@ RUN mkdir -p /tmp/pnpm-store && \
 
 FROM base AS build
 # Completely bypass BuildKit cache mechanism to avoid JSON corruption
-RUN mkdir -p /tmp/pnpm-store && \
+RUN mkdir -p /tmp/pnpm-store /tmp/cargo-cache /tmp/native-target && \
     pnpm config set store-dir /tmp/pnpm-store && \
     pnpm config set network-timeout 300000 && \
+    CARGO_HOME=/tmp/cargo-cache CARGO_TARGET_DIR=/tmp/native-target \
     pnpm install --network-concurrency 1 --no-verify-store-integrity && \
+    CARGO_HOME=/tmp/cargo-cache CARGO_TARGET_DIR=/tmp/native-target \
     pnpm run build
 
 # Go stage updated to match repository version
@@ -41,20 +51,11 @@ RUN cd /app/sharedLibs/go-html-to-md && \
     go build -o libhtml-to-markdown.so -buildmode=c-shared html-to-markdown.go && \
     chmod +x libhtml-to-markdown.so
 
-# Install Rust - updated to match repository version
-FROM rust:1-slim AS rust-base
-COPY sharedLibs/html-transformer /app/sharedLibs/html-transformer
-
-# Install Rust dependencies and build transformer lib
-RUN cd /app/sharedLibs/html-transformer && \
-    cargo build --release && \
-    chmod +x target/release/libhtml_transformer.so
-
 FROM base
 COPY --from=build /app/dist /app/dist
+COPY --from=build /app/native /app/native
 COPY --from=prod-deps /app/node_modules /app/node_modules
 COPY --from=go-base /app/sharedLibs/go-html-to-md/libhtml-to-markdown.so /app/sharedLibs/go-html-to-md/libhtml-to-markdown.so
-COPY --from=rust-base /app/sharedLibs/html-transformer/target/release/libhtml_transformer.so /app/sharedLibs/html-transformer/target/release/libhtml_transformer.so
 
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y \
