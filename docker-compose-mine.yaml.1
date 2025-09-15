@@ -15,7 +15,6 @@ services:
       - REDIS_URL=redis://redis:6379
       - REDIS_RATE_LIMIT_URL=redis://redis:6379
       - PLAYWRIGHT_MICROSERVICE_URL=http://playwright-service:3000/scrape
-      - NUQ_DATABASE_URL=${NUQ_DATABASE_URL:-postgres://postgres:postgres@nuq-postgres:5432/postgres}
       - USE_DB_AUTHENTICATION=${USE_DB_AUTHENTICATION:-false}
       - PORT=3002
       - NUM_WORKERS_PER_QUEUE=${NUM_WORKERS_PER_QUEUE:-1}
@@ -49,7 +48,6 @@ services:
     depends_on:
       - redis
       - playwright-service
-      - nuq-postgres
 
   worker:
     build:
@@ -63,7 +61,6 @@ services:
       - REDIS_URL=redis://redis:6379
       - REDIS_RATE_LIMIT_URL=redis://redis:6379
       - PLAYWRIGHT_MICROSERVICE_URL=http://playwright-service:3000/scrape
-      - NUQ_DATABASE_URL=${NUQ_DATABASE_URL:-postgres://postgres:postgres@nuq-postgres:5432/postgres}
       - USE_DB_AUTHENTICATION=${USE_DB_AUTHENTICATION:-false}
       - NUM_WORKERS_PER_QUEUE=${NUM_WORKERS_PER_QUEUE:-1}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
@@ -97,7 +94,6 @@ services:
       - redis
       - playwright-service
       - api
-      - nuq-postgres
 
   playwright-service:
     build:
@@ -132,17 +128,5 @@ services:
     depends_on:
       - api
 
-  nuq-postgres:
-    build: apps/nuq-postgres
-    environment:
-      - POSTGRES_USER=${POSTGRES_USER:-postgres}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
-      - POSTGRES_DB=${POSTGRES_DB:-postgres}
-    ports:
-      - "5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-
 volumes:
   redis_data:
-  postgres_data:
