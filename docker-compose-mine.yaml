@@ -11,6 +11,12 @@ services:
       nofile:
         soft: 65535
         hard: 65535
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 2G
     environment:
       - REDIS_URL=redis://redis:6379
       - REDIS_RATE_LIMIT_URL=redis://redis:6379
@@ -52,13 +58,18 @@ services:
       - playwright-service
       - nuq-postgres
 
-
   playwright-service:
     build:
       context: ./apps/playwright-service-ts
       dockerfile: Dockerfile
     ports:
       - "3000"
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 1G
     environment:
       - PORT=3000
       - PROXY_SERVER=${PROXY_SERVER}
@@ -72,7 +83,13 @@ services:
       - "6379"
     volumes:
       - redis_data:/data
-    command: redis-server --appendonly yes --appendfsync everysec --no-appendfsync-on-rewrite yes
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+    command: redis-server --appendonly yes --appendfsync everysec --no-appendfsync-on-rewrite yes --maxmemory 400mb --maxmemory-policy allkeys-lru
 
   ui:
     build:
@@ -80,6 +97,12 @@ services:
       dockerfile: Dockerfile
     ports:
       - ":3000"
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
     environment:
       - VITE_FIRECRAWL_API_URL=http://api:3002
       - VITE_FIRECRAWL_API_KEY=${FIRECRAWL_API_KEY:-default-test-key}
@@ -88,6 +111,12 @@ services:
 
   nuq-postgres:
     build: apps/nuq-postgres
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
     environment:
       - POSTGRES_USER=${POSTGRES_USER:-postgres}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
