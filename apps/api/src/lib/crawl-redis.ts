@@ -49,8 +49,22 @@ export async function saveCrawl(id: string, crawl: StoredCrawl) {
   });
 }
 
-export async function getCrawlsByTeamId(team_id: string): Promise<string[]> {
-  return await redisEvictConnection.smembers("crawls_by_team_id:" + team_id);
+export async function recordRobotsBlocked(
+  crawlId: string,
+  url: string,
+) {
+  await redisEvictConnection.sadd(
+    "crawl:" + crawlId + ":robots_blocked",
+    url,
+  );
+  await redisEvictConnection.expire(
+    "crawl:" + crawlId + ":robots_blocked",
+    24 * 60 * 60,
+  );
+}
+
+export async function markCrawlActive(id: string) {
+  await redisEvictConnection.sadd("active_crawls", id);
 }
 
 export async function getCrawl(id: string): Promise<StoredCrawl | null> {
@@ -221,6 +235,9 @@ export async function getDoneJobsOrderedUntil(
     "crawl:" + id + ":jobs_donez_ordered",
     -Infinity,
     until,
+    "LIMIT",
+    start,
+    count,
   );
 }
 
@@ -258,34 +275,6 @@ export async function finishCrawlKickoff(id: string) {
   );
 }
 
-export async function finishCrawlPre(id: string, __logger: Logger = _logger) {
-  if (await isCrawlFinished(id)) {
-    __logger.debug("Marking crawl as pre-finished.", {
-      module: "crawl-redis",
-      method: "finishCrawlPre",
-      crawlId: id,
-    });
-    const set = await redisEvictConnection.setnx(
-      "crawl:" + id + ":finished_pre",
-      "yes",
-    );
-    await redisEvictConnection.expire(
-      "crawl:" + id + ":finished_pre",
-      24 * 60 * 60,
-    );
-    return set === 1;
-  }
-}
-
-export async function unPreFinishCrawl(id: string) {
-  _logger.debug("Un-pre-finishing crawl.", {
-    module: "crawl-redis",
-    method: "unPreFinishCrawl",
-    crawlId: id,
-  });
-  await redisEvictConnection.del("crawl:" + id + ":finished_pre");
-}
-
 export async function finishCrawl(id: string, __logger: Logger = _logger) {
   __logger.debug("Marking crawl as finished.", {
     module: "crawl-redis",
@@ -294,6 +283,8 @@ export async function finishCrawl(id: string, __logger: Logger = _logger) {
   });
   await redisEvictConnection.set("crawl:" + id + ":finish", "yes");
   await redisEvictConnection.expire("crawl:" + id + ":finish", 24 * 60 * 60);
+
+  await redisEvictConnection.srem("active_crawls", id);
 
   const crawl = await getCrawl(id);
   if (crawl && crawl.team_id) {

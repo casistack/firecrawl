@@ -49,13 +49,23 @@ export const url = z.preprocess(
     .string()
     .url()
     .regex(/^https?:\/\//i, "URL uses unsupported protocol")
-    .refine(
-      x =>
-        /(\.[a-zA-Z0-9-\u0400-\u04FF\u0500-\u052F\u2DE0-\u2DFF\uA640-\uA69F]{2,}|\.xn--[a-zA-Z0-9-]{1,})(:\d+)?([\/?#]|$)/i.test(
-          x,
-        ),
-      "URL must have a valid top-level domain or be a valid path",
-    )
+    .refine(x => {
+      if (
+        process.env.TEST_SUITE_SELF_HOSTED === "true" &&
+        process.env.ALLOW_LOCAL_WEBHOOKS === "true"
+      ) {
+        if (
+          /^https?:\/\/(localhost|127\.0\.0\.1|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3})(:\d+)?([\/?#]|$)/i.test(
+            x as string,
+          )
+        ) {
+          return true;
+        }
+      }
+      return /(\.[a-zA-Z0-9-\u0400-\u04FF\u0500-\u052F\u2DE0-\u2DFF\uA640-\uA69F]{2,}|\.xn--[a-zA-Z0-9-]{1,})(:\d+)?([\/?#]|$)/i.test(
+        x,
+      );
+    }, "URL must have a valid top-level domain or be a valid path")
     .refine(x => {
       try {
         checkUrl(x as string);
@@ -73,6 +83,100 @@ const strictMessage =
 const agentExtractModelValue = "fire-1";
 export const isAgentExtractModelValid = (x: string | undefined) =>
   x?.toLowerCase() === agentExtractModelValue;
+
+function normalizeSchemaForOpenAI(schema: any): any {
+  if (!schema || typeof schema !== "object") {
+    return schema;
+  }
+
+  const visited = new WeakSet();
+
+  function normalizeObject(obj: any): any {
+    if (typeof obj !== "object" || obj === null) return obj;
+    if (Array.isArray(obj)) return obj;
+
+    if (visited.has(obj)) return obj;
+    visited.add(obj);
+
+    const normalized = { ...obj };
+
+    if (
+      normalized.type === "object" &&
+      normalized.hasOwnProperty("properties") &&
+      normalized.hasOwnProperty("additionalProperties")
+    ) {
+      delete normalized.additionalProperties;
+    }
+
+    if (
+      normalized.type === "object" &&
+      normalized.hasOwnProperty("required") &&
+      normalized.hasOwnProperty("properties")
+    ) {
+      if (
+        Array.isArray(normalized.required) &&
+        typeof normalized.properties === "object" &&
+        normalized.properties !== null
+      ) {
+        const validRequired = normalized.required.filter((field: string) =>
+          normalized.properties.hasOwnProperty(field),
+        );
+        if (validRequired.length > 0) {
+          normalized.required = validRequired;
+        } else {
+          delete normalized.required;
+        }
+      } else {
+        delete normalized.required;
+      }
+    }
+
+    for (const [key, value] of Object.entries(normalized)) {
+      if (typeof value === "object" && value !== null) {
+        normalized[key] = normalizeObject(value);
+      }
+    }
+
+    return normalized;
+  }
+
+  return normalizeObject(schema);
+}
+function validateSchemaForOpenAI(schema: any): boolean {
+  if (!schema || typeof schema !== "object") {
+    return true;
+  }
+
+  const visited = new WeakSet();
+
+  function hasInvalidStructure(obj: any): boolean {
+    if (typeof obj !== "object" || obj === null) return false;
+
+    if (visited.has(obj)) return false;
+    visited.add(obj);
+
+    if (
+      obj.type === "object" &&
+      !obj.hasOwnProperty("properties") &&
+      !obj.hasOwnProperty("patternProperties") &&
+      obj.additionalProperties === true
+    ) {
+      return true;
+    }
+
+    for (const value of Object.values(obj)) {
+      if (typeof value === "object" && value !== null) {
+        if (hasInvalidStructure(value)) return true;
+      }
+    }
+    return false;
+  }
+
+  return !hasInvalidStructure(schema);
+}
+
+const OPENAI_SCHEMA_ERROR_MESSAGE =
+  "Schema contains invalid structure for OpenAI: object type with no 'properties' defined but 'additionalProperties: true' (schema-less dictionary not supported by OpenAI). Please define specific properties for your object.";
 
 export const agentOptionsExtract = z
   .object({
@@ -99,7 +203,11 @@ export const extractOptions = z
         {
           message: "Invalid JSON schema.",
         },
-      ),
+      )
+      .transform(val => normalizeSchemaForOpenAI(val))
+      .refine(val => validateSchemaForOpenAI(val), {
+        message: OPENAI_SCHEMA_ERROR_MESSAGE,
+      }),
     systemPrompt: z.string().max(10000).default(""),
     prompt: z.string().max(10000).optional(),
     temperature: z.number().optional(),
@@ -130,7 +238,11 @@ const extractOptionsWithAgent = z
         {
           message: "Invalid JSON schema.",
         },
-      ),
+      )
+      .transform(val => normalizeSchemaForOpenAI(val))
+      .refine(val => validateSchemaForOpenAI(val), {
+        message: OPENAI_SCHEMA_ERROR_MESSAGE,
+      }),
     systemPrompt: z.string().max(10000).default(""),
     prompt: z.string().max(10000).optional(),
     temperature: z.number().optional(),
@@ -367,7 +479,11 @@ const baseScrapeOptions = z
             {
               message: "Invalid JSON schema.",
             },
-          ),
+          )
+          .transform(val => normalizeSchemaForOpenAI(val))
+          .refine(val => validateSchemaForOpenAI(val), {
+            message: OPENAI_SCHEMA_ERROR_MESSAGE,
+          }),
         modes: z.enum(["json", "git-diff"]).array().optional().default([]),
         tag: z.string().or(z.null()).default(null),
       })
@@ -395,13 +511,13 @@ const baseScrapeOptions = z
         languages: z.string().array().optional(),
       })
       .optional(),
-    skipTlsVerification: z.boolean().default(false),
+    skipTlsVerification: z.boolean().optional(),
     removeBase64Images: z.boolean().default(true),
     fastMode: z.boolean().default(false),
     useMock: z.string().optional(),
     blockAds: z.boolean().default(true),
     proxy: z.enum(["basic", "stealth", "auto"]).default("basic"),
-    maxAge: z.number().int().gte(0).safe().default(0),
+    maxAge: z.number().int().gte(0).safe().default(1 * 24 * 60 * 60 * 1000),
     storeInCache: z.boolean().default(true),
     // @deprecated
     __experimental_cache: z.boolean().default(false).optional(),
@@ -573,7 +689,11 @@ const extractV1Options = z
         {
           message: "Invalid JSON schema.",
         },
-      ),
+      )
+      .transform(val => normalizeSchemaForOpenAI(val))
+      .refine(val => validateSchemaForOpenAI(val), {
+        message: OPENAI_SCHEMA_ERROR_MESSAGE,
+      }),
     limit: z.number().int().positive().finite().safe().optional(),
     ignoreSitemap: z.boolean().default(false),
     includeSubdomains: z.boolean().default(true),
@@ -663,7 +783,7 @@ export type ScrapeRequestInput = z.input<typeof scrapeRequestSchema>;
 
 export const batchScrapeRequestSchema = baseScrapeOptions
   .extend({
-    urls: url.array(),
+    urls: url.array().min(1),
     origin: z.string().optional().default("api"),
     integration: integrationSchema.optional().transform(val => val || null),
     webhook: webhookSchema.optional(),
@@ -680,7 +800,7 @@ export const batchScrapeRequestSchema = baseScrapeOptions
 
 export const batchScrapeRequestSchemaNoURLValidation = baseScrapeOptions
   .extend({
-    urls: z.string().array(),
+    urls: z.string().array().min(1),
     origin: z.string().optional().default("api"),
     integration: integrationSchema.optional().transform(val => val || null),
     webhook: webhookSchema.optional(),
@@ -908,6 +1028,7 @@ export type Document = {
     cachedAt?: string;
     creditsUsed?: number;
     postprocessorsUsed?: string[];
+    indexId?: string; // ID used to store the document in the index (GCS)
     // [key: string]: string | string[] | number | { smartScrape: number; other: number; total: number } | undefined;
   };
   serpResults?: {
@@ -1105,6 +1226,7 @@ export type TeamFlags = {
   allowTeammateInvites?: boolean;
   crawlTtlHours?: number;
   ipWhitelist?: boolean;
+  skipCountryCheck?: boolean;
 } | null;
 
 export type AuthCreditUsageChunkFromTeam = Omit<
@@ -1335,7 +1457,7 @@ export const searchRequestSchema = z
     tbs: z.string().optional(),
     filter: z.string().optional(),
     lang: z.string().optional().default("en"),
-    country: z.string().optional().default("us"),
+    country: z.string().optional(),
     location: z.string().optional(),
     origin: z.string().optional().default("api"),
     integration: integrationSchema.optional().transform(val => val || null),
@@ -1369,6 +1491,8 @@ export const searchRequestSchema = z
   .refine(x => waitForRefine(x.scrapeOptions), waitForRefineOpts)
   .transform(x => ({
     ...x,
+    country:
+      x.country !== undefined ? x.country : x.location ? undefined : "us",
     scrapeOptions: extractTransform(x.scrapeOptions),
   }));
 
