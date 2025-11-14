@@ -14,6 +14,7 @@ import Ajv from "ajv";
 import { ErrorCodes } from "../../lib/error";
 import { integrationSchema } from "../../utils/integration";
 import { webhookSchema } from "../../services/webhook/schema";
+import { BrandingProfile } from "../../types/branding";
 
 type Format =
   | "markdown"
@@ -25,7 +26,8 @@ type Format =
   | "extract"
   | "json"
   | "summary"
-  | "changeTracking";
+  | "changeTracking"
+  | "branding";
 
 export const url = z.preprocess(
   x => {
@@ -423,6 +425,7 @@ const baseScrapeOptions = z
         "json",
         "summary",
         "changeTracking",
+        "branding",
       ])
       .array()
       .optional()
@@ -517,7 +520,12 @@ const baseScrapeOptions = z
     useMock: z.string().optional(),
     blockAds: z.boolean().default(true),
     proxy: z.enum(["basic", "stealth", "auto"]).default("basic"),
-    maxAge: z.number().int().gte(0).safe().default(1 * 24 * 60 * 60 * 1000),
+    maxAge: z
+      .number()
+      .int()
+      .gte(0)
+      .safe()
+      .default(1 * 24 * 60 * 60 * 1000),
     storeInCache: z.boolean().default(true),
     // @deprecated
     __experimental_cache: z.boolean().default(false).optional(),
@@ -949,6 +957,7 @@ export type Document = {
   extract?: any;
   json?: any;
   summary?: string;
+  branding?: BrandingProfile;
   warning?: string;
   actions?: {
     screenshots?: string[];

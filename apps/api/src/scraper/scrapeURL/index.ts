@@ -49,6 +49,7 @@ import { LLMRefusalError } from "./transformers/llmExtract";
 import { urlSpecificParams } from "./lib/urlSpecificParams";
 import { loadMock, MockState } from "./lib/mock";
 import { CostTracking } from "../../lib/cost-tracking";
+import { getEngineForUrl } from "../WebScraper/utils/engine-forcing";
 import {
   addIndexRFInsertJob,
   generateDomainSplits,
@@ -132,6 +133,10 @@ function buildFeatureFlags(
     } else {
       flags.add("screenshot");
     }
+  }
+
+  if (hasFormatOfType(options.formats, "branding")) {
+    flags.add("branding");
   }
 
   if (options.waitFor !== 0) {
@@ -252,6 +257,15 @@ async function buildMetaObject(
       internalOptions,
       specParams.internalOptions,
     );
+  }
+
+  if (internalOptions.forceEngine === undefined) {
+    const forcedEngine = getEngineForUrl(url);
+    if (forcedEngine !== undefined) {
+      internalOptions = Object.assign(internalOptions, {
+        forceEngine: forcedEngine,
+      });
+    }
   }
 
   const logger = _logger.child({
@@ -721,6 +735,7 @@ async function scrapeURLLoop(meta: Meta): Promise<ScrapeUrlResponse> {
       rawHtml: engineResult.html,
       screenshot: engineResult.screenshot,
       actions: engineResult.actions,
+      branding: engineResult.branding,
       metadata: {
         sourceURL: meta.internalOptions.unnormalizedSourceURL ?? meta.url,
         url: engineResult.url,
@@ -731,7 +746,7 @@ async function scrapeURLLoop(meta: Meta): Promise<ScrapeUrlResponse> {
           ? { title: engineResult.pdfMetadata.title }
           : {}),
         contentType: engineResult.contentType,
-        proxyUsed: meta.featureFlags.has("stealthProxy") ? "stealth" : "basic",
+        proxyUsed: engineResult.proxyUsed ?? "basic",
         ...(fallbackList.find(x =>
           ["index", "index;documents"].includes(x.engine),
         )
@@ -949,6 +964,10 @@ export async function scrapeURL(
     }
 
     try {
+      // temporary fix until new scrapeURL system
+      let documentReattempted = false;
+      let pdfReattempted = false;
+
       let result: ScrapeUrlResponse;
       while (true) {
         try {
@@ -960,6 +979,7 @@ export async function scrapeURL(
             (meta.internalOptions.forceEngine === undefined ||
               Array.isArray(meta.internalOptions.forceEngine))
           ) {
+            // note: we might want to reattempt check here too
             meta.logger.debug(
               "More feature flags requested by scraper: adding " +
                 error.featureFlags.join(", "),
@@ -999,12 +1019,20 @@ export async function scrapeURL(
               );
               throw error;
             } else {
-              meta.logger.debug(
-                "PDF was blocked by anti-bot, prefetching with chrome-cdp",
-              );
-              meta.featureFlags = new Set(
-                [...meta.featureFlags].filter(x => x !== "pdf"),
-              );
+              if (!pdfReattempted) {
+                meta.logger.debug(
+                  "PDF was blocked by anti-bot, prefetching with chrome-cdp",
+                );
+
+                pdfReattempted = true;
+                meta.featureFlags = new Set(
+                  [...meta.featureFlags].filter(x => x !== "pdf"),
+                );
+              } else {
+                meta.logger.debug(
+                  "PDF was blocked by anti-bot, skipping as it was already attempted",
+                );
+              }
             }
           } else if (
             error instanceof DocumentAntibotError &&
@@ -1016,12 +1044,20 @@ export async function scrapeURL(
               );
               throw error;
             } else {
-              meta.logger.debug(
-                "Document was blocked by anti-bot, prefetching with chrome-cdp",
-              );
-              meta.featureFlags = new Set(
-                [...meta.featureFlags].filter(x => x !== "document"),
-              );
+              if (!documentReattempted) {
+                meta.logger.debug(
+                  "Document was blocked by anti-bot, prefetching with chrome-cdp",
+                );
+
+                documentReattempted = true;
+                meta.featureFlags = new Set(
+                  [...meta.featureFlags].filter(x => x !== "document"),
+                );
+              } else {
+                meta.logger.debug(
+                  "Document was blocked by anti-bot, skipping as it was already attempted",
+                );
+              }
             }
           } else {
             throw error;
