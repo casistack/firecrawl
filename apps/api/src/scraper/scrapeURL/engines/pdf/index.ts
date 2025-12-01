@@ -74,8 +74,15 @@ async function scrapePDFWithRunPodMU(
       Number(process.env.PDF_MU_V2_EXPERIMENT_PERCENT ?? "100")
   ) {
     (async () => {
+      const pdfParseId = crypto.randomUUID();
       const startedAt = Date.now();
       const logger = meta.logger.child({ method: "scrapePDF/MUv2Experiment" });
+      logger.info("MU v2 experiment started", {
+        scrapeId: meta.id,
+        pdfParseId,
+        url: meta.rewrittenUrl ?? meta.url,
+        maxPages,
+      });
       try {
         const resp = await robustFetch({
           url: process.env.PDF_MU_V2_BASE_URL ?? "",
@@ -86,6 +93,7 @@ async function scrapePDFWithRunPodMU(
               filename: path.basename(tempFilePath) + ".pdf",
               timeout: meta.abort.scrapeTimeout(),
               created_at: Date.now(),
+              id: pdfParseId,
               ...(maxPages !== undefined && { max_pages: maxPages }),
             },
           },
@@ -258,9 +266,14 @@ export async function scrapePDF(meta: Meta): Promise<EngineScrapeResult> {
         proxyUsed: meta.pdfPrefetch.proxyUsed,
       };
     } else {
-      const file = await fetchFileToBuffer(meta.rewrittenUrl ?? meta.url, {
-        headers: meta.options.headers,
-      });
+      const file = await fetchFileToBuffer(
+        meta.rewrittenUrl ?? meta.url,
+        meta.options.skipTlsVerification,
+        {
+          headers: meta.options.headers,
+          signal: meta.abort.asSignal(),
+        },
+      );
 
       const ct = file.response.headers.get("Content-Type");
       if (ct && !ct.includes("application/pdf")) {
@@ -293,9 +306,15 @@ export async function scrapePDF(meta: Meta): Promise<EngineScrapeResult> {
   const { response, tempFilePath } =
     meta.pdfPrefetch !== undefined && meta.pdfPrefetch !== null
       ? { response: meta.pdfPrefetch, tempFilePath: meta.pdfPrefetch.filePath }
-      : await downloadFile(meta.id, meta.rewrittenUrl ?? meta.url, {
-          headers: meta.options.headers,
-        });
+      : await downloadFile(
+          meta.id,
+          meta.rewrittenUrl ?? meta.url,
+          meta.options.skipTlsVerification,
+          {
+            headers: meta.options.headers,
+            signal: meta.abort.asSignal(),
+          },
+        );
 
   if ((response as any).headers) {
     // if downloadFile was used
