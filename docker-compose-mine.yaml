@@ -65,7 +65,7 @@ services:
       nuq-postgres:
         condition: service_started
       rabbitmq:
-        condition: service_healthy
+        condition: service_started
 
   playwright-service:
     build:
@@ -147,11 +147,11 @@ services:
         reservations:
           memory: 512M
     healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
-      interval: 15s
-      timeout: 30s
-      retries: 10
-      start_period: 120s
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
 
