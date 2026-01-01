@@ -39,8 +39,8 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no
 
 # Copy package files first for better layer caching
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
-COPY packages/rust-html-to-md/package.json ./packages/rust-html-to-md/
-COPY packages/rust-html-to-md/Cargo.toml ./packages/rust-html-to-md/
+# Copy native module files which are a workspace dependency
+COPY native ./native/
 
 # Install dependencies with optimizations
 RUN pnpm config set network-timeout 300000 && \
