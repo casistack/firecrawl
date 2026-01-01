@@ -1,18 +1,23 @@
 import type { Logger } from "winston";
+import { config } from "../../config";
 import { scrapeOptions, ScrapeOptions } from "../../controllers/v2/types";
 import { logger as _logger } from "../../lib/logger";
 import { Engine } from "../scrapeURL/engines";
 import { scrapeURL } from "../scrapeURL";
 import { CostTracking } from "../../lib/cost-tracking";
-import { processSitemap } from "@mendable/firecrawl-rs";
+import {
+  processSitemap,
+  SitemapProcessingResult,
+} from "@mendable/firecrawl-rs";
 import { fetchFileToBuffer } from "../scrapeURL/engines/utils/downloadFile";
 import { gunzip } from "node:zlib";
 import { promisify } from "node:util";
 import { SitemapError } from "../../lib/error";
+import { useIndex } from "../../services";
 
 const useFireEngine =
-  process.env.FIRE_ENGINE_BETA_URL !== "" &&
-  process.env.FIRE_ENGINE_BETA_URL !== undefined;
+  config.FIRE_ENGINE_BETA_URL !== "" &&
+  config.FIRE_ENGINE_BETA_URL !== undefined;
 
 type SitemapScrapeOptions = {
   url: string;
@@ -48,11 +53,14 @@ async function getSitemapXML(options: SitemapScrapeOptions): Promise<string> {
     options.location && options.location.country !== "us-generic";
 
   const forceEngine: Engine[] = [
-    ...(options.maxAge > 0 ? ["index" as const] : []),
+    ...(options.maxAge > 0 && useIndex ? ["index" as const] : []),
     ...(isLocationSpecified && useFireEngine
       ? [
           "fire-engine;tlsclient" as const,
           "fire-engine;tlsclient;stealth" as const,
+          // final fallback to chrome-cdp to fill the index
+          "fire-engine;chrome-cdp" as const,
+          "fire-engine;chrome-cdp;stealth" as const,
         ]
       : []),
     "fetch",
@@ -60,6 +68,9 @@ async function getSitemapXML(options: SitemapScrapeOptions): Promise<string> {
       ? [
           "fire-engine;tlsclient" as const,
           "fire-engine;tlsclient;stealth" as const,
+          // final fallback to chrome-cdp to fill the index
+          "fire-engine;chrome-cdp" as const,
+          "fire-engine;chrome-cdp;stealth" as const,
         ]
       : []),
   ];
@@ -120,7 +131,7 @@ export async function scrapeSitemap(
 
   logger.info("Processing sitemap");
 
-  let instructions;
+  let instructions: SitemapProcessingResult;
   try {
     instructions = await processSitemap(xml);
   } catch (error) {
