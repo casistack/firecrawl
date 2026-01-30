@@ -183,7 +183,7 @@ async function processJob(job: NuQJob<ScrapeJobSingleUrls>) {
       ? setTimeout(
           () =>
             abortController.abort(
-              new ScrapeJobTimeoutError("Scrape timed out"),
+              new ScrapeJobTimeoutError(),
             ),
           remainingTime,
         )
@@ -192,7 +192,7 @@ async function processJob(job: NuQJob<ScrapeJobSingleUrls>) {
 
   try {
     if (remainingTime !== undefined && remainingTime < 0) {
-      throw new ScrapeJobTimeoutError("Scrape timed out");
+      throw new ScrapeJobTimeoutError();
     }
 
     if (job.data.crawl_id) {
@@ -217,7 +217,7 @@ async function processJob(job: NuQJob<ScrapeJobSingleUrls>) {
                   timeoutHandle = setTimeout(resolve, remainingTime);
                 });
 
-                throw new ScrapeJobTimeoutError("Scrape timed out");
+                throw new ScrapeJobTimeoutError();
               })(),
             ]
           : []),
@@ -231,7 +231,7 @@ async function processJob(job: NuQJob<ScrapeJobSingleUrls>) {
     try {
       signal?.throwIfAborted();
     } catch (e) {
-      throw new ScrapeJobTimeoutError("Scrape timed out");
+      throw new ScrapeJobTimeoutError();
     }
 
     if (!pipeline.success) {
@@ -298,7 +298,7 @@ async function processJob(job: NuQJob<ScrapeJobSingleUrls>) {
         if (!filterResult.allowed && !job.data.isCrawlSourceScrape) {
           const reason =
             filterResult.denialReason ||
-            "Redirected target URL is not allowed by crawlOptions";
+            `The URL you requested redirected to a different URL ("${doc.metadata.url}"), but that redirected URL is not allowed by your crawl configuration (includePaths, excludePaths, allowBackwardCrawling, or other filters). The original URL was "${doc.metadata.sourceURL}". To include this redirected URL, adjust your crawl options to allow it.`;
           throw new CrawlDenialError(reason);
         }
 
@@ -356,78 +356,81 @@ async function processJob(job: NuQJob<ScrapeJobSingleUrls>) {
             doc.metadata.url ?? doc.metadata.sourceURL ?? sc.originUrl!,
           );
 
-          const links = await crawler.filterLinks(
-            await crawler.extractLinksFromHTML(
-              rawHtml ?? "",
-              doc.metadata?.url ?? doc.metadata?.sourceURL ?? sc.originUrl!,
-            ),
-            Infinity,
-            sc.crawlerOptions?.maxDepth ?? 10,
-          );
-          logger.debug("Discovered " + links.links.length + " links...", {
-            linksLength: links.links.length,
-          });
+          if (!sc.crawlerOptions?.sitemapOnly) {
+            const links = await crawler.filterLinks(
+              await crawler.extractLinksFromHTML(
+                rawHtml ?? "",
+                doc.metadata?.url ?? doc.metadata?.sourceURL ?? sc.originUrl!,
+              ),
+              Infinity,
+              sc.crawlerOptions?.maxDepth ?? 10,
+            );
+            logger.debug("Discovered " + links.links.length + " links...", {
+              linksLength: links.links.length,
+            });
 
-          // Store robots blocked URLs in Redis set
-          for (const [url, reason] of links.denialReasons) {
-            if (reason === "URL blocked by robots.txt") {
-              await recordRobotsBlocked(job.data.crawl_id, url);
+            // Store robots blocked URLs in Redis set
+            for (const [url, reason] of links.denialReasons) {
+              if (reason === "URL blocked by robots.txt") {
+                await recordRobotsBlocked(job.data.crawl_id, url);
+              }
             }
-          }
 
-          for (const link of links.links) {
-            if (await lockURL(job.data.crawl_id, sc, link)) {
-              // This seems to work really welel
-              const jobPriority = await getJobPriority({
-                team_id: sc.team_id,
-                basePriority: job.data.crawl_id ? 20 : 10,
-              });
-              const jobId = uuidv7();
-
-              logger.debug(
-                "Determined job priority " +
-                  jobPriority +
-                  " for URL " +
-                  JSON.stringify(link),
-                { jobPriority, url: link },
-              );
-
-              await addScrapeJob(
-                {
-                  url: link,
-                  mode: "single_urls",
+            for (const link of links.links) {
+              if (await lockURL(job.data.crawl_id, sc, link)) {
+                // This seems to work really welel
+                const jobPriority = await getJobPriority({
                   team_id: sc.team_id,
-                  scrapeOptions: scrapeOptions.parse(sc.scrapeOptions),
-                  internalOptions: sc.internalOptions,
-                  crawlerOptions: {
-                    ...sc.crawlerOptions,
-                    currentDiscoveryDepth:
-                      (job.data.crawlerOptions?.currentDiscoveryDepth ?? 0) + 1,
-                  },
-                  origin: job.data.origin,
-                  integration: job.data.integration,
-                  crawl_id: job.data.crawl_id,
-                  requestId: job.data.requestId,
-                  webhook: job.data.webhook,
-                  v1: job.data.v1,
-                  zeroDataRetention: job.data.zeroDataRetention,
-                  apiKeyId: job.data.apiKeyId,
-                },
-                jobId,
-                jobPriority,
-              );
+                  basePriority: job.data.crawl_id ? 20 : 10,
+                });
+                const jobId = uuidv7();
 
-              await addCrawlJob(job.data.crawl_id, jobId, logger);
-              logger.debug("Added job for URL " + JSON.stringify(link), {
-                jobPriority,
-                url: link,
-                newJobId: jobId,
-              });
-            } else {
-              // TODO: removed this, ok? too many 'not useful' logs (?) Mogery!
-              // logger.debug("Could not lock URL " + JSON.stringify(link), {
-              //   url: link,
-              // });
+                logger.debug(
+                  "Determined job priority " +
+                    jobPriority +
+                    " for URL " +
+                    JSON.stringify(link),
+                  { jobPriority, url: link },
+                );
+
+                await addScrapeJob(
+                  {
+                    url: link,
+                    mode: "single_urls",
+                    team_id: sc.team_id,
+                    scrapeOptions: scrapeOptions.parse(sc.scrapeOptions),
+                    internalOptions: sc.internalOptions,
+                    crawlerOptions: {
+                      ...sc.crawlerOptions,
+                      currentDiscoveryDepth:
+                        (job.data.crawlerOptions?.currentDiscoveryDepth ?? 0) +
+                        1,
+                    },
+                    origin: job.data.origin,
+                    integration: job.data.integration,
+                    crawl_id: job.data.crawl_id,
+                    requestId: job.data.requestId,
+                    webhook: job.data.webhook,
+                    v1: job.data.v1,
+                    zeroDataRetention: job.data.zeroDataRetention,
+                    apiKeyId: job.data.apiKeyId,
+                  },
+                  jobId,
+                  jobPriority,
+                );
+
+                await addCrawlJob(job.data.crawl_id, jobId, logger);
+                logger.debug("Added job for URL " + JSON.stringify(link), {
+                  jobPriority,
+                  url: link,
+                  newJobId: jobId,
+                });
+              } else {
+                // TODO: removed this, ok? too many 'not useful' logs (?) Mogery!
+                // logger.debug("Could not lock URL " + JSON.stringify(link), {
+                //   url: link,
+                // });
+              }
             }
           }
 
@@ -442,7 +445,7 @@ async function processJob(job: NuQJob<ScrapeJobSingleUrls>) {
               const url = doc.metadata.url ?? doc.metadata.sourceURL!;
               const reason =
                 filterResult.denialReasons.get(url) ||
-                "Source URL is not allowed by crawl configuration";
+                `The source URL ("${url}") you provided as the starting point for this crawl is not allowed by your own crawl configuration. This can happen if your includePaths, excludePaths, maxDepth, or other filters exclude the starting URL itself. Please check your crawl configuration to ensure the starting URL is allowed.`;
               throw new CrawlDenialError(reason);
             }
           }
@@ -452,7 +455,7 @@ async function processJob(job: NuQJob<ScrapeJobSingleUrls>) {
       try {
         signal?.throwIfAborted();
       } catch (e) {
-        throw new ScrapeJobTimeoutError("Scrape timed out");
+        throw new ScrapeJobTimeoutError();
       }
 
       const credits_billed = await billScrapeJob(
@@ -523,7 +526,7 @@ async function processJob(job: NuQJob<ScrapeJobSingleUrls>) {
       try {
         signal?.throwIfAborted();
       } catch (e) {
-        throw new ScrapeJobTimeoutError("Scrape timed out");
+        throw new ScrapeJobTimeoutError();
       }
 
       const credits_billed = await billScrapeJob(
@@ -719,7 +722,7 @@ async function kickoffGetIndexLinks(
   crawler: WebCrawler,
   url: string,
 ) {
-  if (sc.crawlerOptions.ignoreSitemap) {
+  if (sc.crawlerOptions.ignoreSitemap || sc.crawlerOptions.sitemapOnly) {
     return [];
   }
 

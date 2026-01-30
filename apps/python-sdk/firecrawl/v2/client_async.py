@@ -10,6 +10,7 @@ from .types import (
     ScrapeOptions,
     CrawlRequest,
     WebhookConfig,
+    AgentWebhookConfig,
     SearchRequest,
     SearchData,
     SourceOption,
@@ -80,6 +81,13 @@ class AsyncFirecrawlClient:
         return await async_search.search(self.async_http_client, request)
 
     async def start_crawl(self, url: str, **kwargs) -> CrawlResponse:
+        sitemap = kwargs.pop("sitemap", None)
+        ignore_sitemap = kwargs.pop("ignore_sitemap", None)
+        if sitemap is None and ignore_sitemap is not None:
+            sitemap = "skip" if ignore_sitemap else "include"
+        if sitemap is not None:
+            kwargs["sitemap"] = sitemap
+
         request = CrawlRequest(url=url, **kwargs)
         return await async_crawl.start_crawl(self.async_http_client, request)
 
@@ -170,6 +178,28 @@ class AsyncFirecrawlClient:
             request_timeout=request_timeout,
         )
 
+    async def get_crawl_status_page(
+        self,
+        next_url: str,
+        *,
+        request_timeout: Optional[float] = None,
+    ) -> CrawlJob:
+        """
+        Fetch a single page of crawl results using a next URL.
+
+        Args:
+            next_url: Opaque next URL from a prior crawl status response
+            request_timeout: Timeout (in seconds) for the HTTP request
+
+        Returns:
+            CrawlJob with the page data and next URL (if any)
+        """
+        return await async_crawl.get_crawl_status_page(
+            self.async_http_client,
+            next_url,
+            request_timeout=request_timeout,
+        )
+
     async def cancel_crawl(self, job_id: str) -> bool:
         return await async_crawl.cancel_crawl(self.async_http_client, job_id)
 
@@ -238,6 +268,18 @@ class AsyncFirecrawlClient:
             self.async_http_client, 
             job_id,
             pagination_config=pagination_config
+        )
+
+    async def get_batch_scrape_status_page(
+        self,
+        next_url: str,
+        *,
+        request_timeout: Optional[float] = None,
+    ):
+        return await async_batch.get_batch_scrape_status_page(
+            self.async_http_client,
+            next_url,
+            request_timeout=request_timeout,
         )
 
     async def cancel_batch_scrape(self, job_id: str) -> bool:
@@ -323,6 +365,8 @@ class AsyncFirecrawlClient:
         timeout: Optional[int] = None,
         max_credits: Optional[int] = None,
         strict_constrain_to_urls: Optional[bool] = None,
+        model: Optional[Literal["spark-1-pro", "spark-1-mini"]] = None,
+        webhook: Optional[Union[str, AgentWebhookConfig]] = None,
     ):
         return await async_agent.agent(
             self.async_http_client,
@@ -334,6 +378,8 @@ class AsyncFirecrawlClient:
             timeout=timeout,
             max_credits=max_credits,
             strict_constrain_to_urls=strict_constrain_to_urls,
+            model=model,
+            webhook=webhook,
         )
 
     async def get_agent_status(self, job_id: str):
@@ -348,6 +394,8 @@ class AsyncFirecrawlClient:
         integration: Optional[str] = None,
         max_credits: Optional[int] = None,
         strict_constrain_to_urls: Optional[bool] = None,
+        model: Optional[Literal["spark-1-pro", "spark-1-mini"]] = None,
+        webhook: Optional[Union[str, AgentWebhookConfig]] = None,
     ):
         return await async_agent.start_agent(
             self.async_http_client,
@@ -357,6 +405,8 @@ class AsyncFirecrawlClient:
             integration=integration,
             max_credits=max_credits,
             strict_constrain_to_urls=strict_constrain_to_urls,
+            model=model,
+            webhook=webhook,
         )
 
     async def cancel_agent(self, job_id: str) -> bool:
@@ -405,4 +455,3 @@ class AsyncFirecrawlClient:
         timeout: Optional[int] = None,
     ) -> AsyncWatcher:
         return AsyncWatcher(self, job_id, kind=kind, poll_interval=poll_interval, timeout=timeout)
-

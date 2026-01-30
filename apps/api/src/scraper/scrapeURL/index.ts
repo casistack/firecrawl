@@ -73,7 +73,11 @@ import {
   AbortManager,
   AbortManagerThrownError,
 } from "./lib/abortManager";
-import { ScrapeJobTimeoutError, CrawlDenialError } from "../../lib/error";
+import {
+  ScrapeJobTimeoutError,
+  CrawlDenialError,
+  ActionsNotSupportedError,
+} from "../../lib/error";
 import { htmlTransform } from "./lib/removeUnwantedElements";
 import { postprocessors } from "./postprocessors";
 import { rewriteUrl } from "./lib/rewriteUrl";
@@ -171,7 +175,7 @@ function buildFeatureFlags(
     flags.add("useFastMode");
   }
 
-  if (options.proxy === "stealth") {
+  if (options.proxy === "stealth" || options.proxy === "enhanced") {
     flags.add("stealthProxy");
   }
 
@@ -250,10 +254,7 @@ async function buildMetaObject(
   const abortHandle =
     options.timeout !== undefined
       ? setTimeout(
-          () =>
-            abortController.abort(
-              new ScrapeJobTimeoutError("Scrape timed out"),
-            ),
+          () => abortController.abort(new ScrapeJobTimeoutError()),
           options.timeout,
         )
       : undefined;
@@ -282,7 +283,7 @@ async function buildMetaObject(
             tier: "scrape",
             timesOutAt: new Date(Date.now() + options.timeout),
             throwable() {
-              return new ScrapeJobTimeoutError("Scrape timed out");
+              return new ScrapeJobTimeoutError();
             },
           }
         : undefined,
@@ -333,6 +334,8 @@ type EngineScrapeResultWithContext = {
   result: EngineScrapeResult;
 };
 
+const MAX_HTML_SIZE_FOR_MARKDOWN_CHECK = 300 * 1024; // 300KB
+
 async function scrapeURLLoopIter(
   meta: Meta,
   engine: Engine,
@@ -359,12 +362,25 @@ async function scrapeURLLoopIter(
       hasMarkdown || hasChangeTracking || hasJson || hasSummary;
 
     let checkMarkdown: string;
+    const htmlSize = engineResult.html?.length ?? 0;
+    const shouldSkipMarkdownCheck = htmlSize > MAX_HTML_SIZE_FOR_MARKDOWN_CHECK;
+
     if (
       meta.internalOptions.teamId === "sitemap" ||
       meta.internalOptions.teamId === "robots-txt"
     ) {
       checkMarkdown = engineResult.html?.trim() ?? "";
     } else if (!needsMarkdown) {
+      checkMarkdown = engineResult.html?.trim() ?? "";
+    } else if (shouldSkipMarkdownCheck) {
+      // Skip markdown conversion for large HTML to avoid slowdowns
+      meta.logger.debug(
+        "Skipping markdown conversion for quality check due to large HTML size",
+        {
+          htmlSize,
+          threshold: MAX_HTML_SIZE_FOR_MARKDOWN_CHECK,
+        },
+      );
       checkMarkdown = engineResult.html?.trim() ?? "";
     } else {
       const requestId = meta.id || meta.internalOptions.crawlId;
@@ -488,6 +504,18 @@ async function scrapeURLLoop(meta: Meta): Promise<ScrapeUrlResponse> {
     // TODO: ScrapeEvents
 
     const fallbackList = await buildFallbackList(meta);
+
+    // Check if actions are requested but no engines support them
+    if (meta.featureFlags.has("actions")) {
+      if (
+        fallbackList.length === 0 ||
+        fallbackList.every(engine => engine.unsupportedFeatures.has("actions"))
+      ) {
+        throw new ActionsNotSupportedError(
+          "Actions are not supported by any available engines. Actions require Fire Engine (fire-engine) to be enabled.",
+        );
+      }
+    }
 
     setSpanAttributes(span, {
       "engine.fallback_list": fallbackList.map(f => f.engine).join(","),
@@ -1076,6 +1104,7 @@ export async function scrapeURL(
                 meta.logger.debug(
                   "PDF was blocked by anti-bot, skipping as it was already attempted",
                 );
+                throw error;
               }
             }
           } else if (
@@ -1101,6 +1130,7 @@ export async function scrapeURL(
                 meta.logger.debug(
                   "Document was blocked by anti-bot, skipping as it was already attempted",
                 );
+                throw error;
               }
             }
           } else {

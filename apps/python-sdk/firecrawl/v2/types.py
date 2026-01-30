@@ -320,6 +320,23 @@ class WebhookConfig(BaseModel):
     events: Optional[List[Literal["completed", "failed", "page", "started"]]] = None
 
 
+class AgentWebhookConfig(BaseModel):
+    """Configuration for agent webhooks.
+
+    Agent webhooks support different events than crawl webhooks:
+    - started: When the agent job starts
+    - action: When the agent takes an action/step
+    - completed: When the job completes successfully
+    - failed: When the job fails
+    - cancelled: When the job is cancelled
+    """
+
+    url: str
+    headers: Optional[Dict[str, str]] = None
+    metadata: Optional[Dict[str, str]] = None
+    events: Optional[List[Literal["started", "action", "completed", "failed", "cancelled"]]] = None
+
+
 class WebhookData(BaseModel):
     """Data sent to webhooks."""
 
@@ -506,7 +523,7 @@ class ScrapeOptions(BaseModel):
     fast_mode: Optional[bool] = None
     use_mock: Optional[str] = None
     block_ads: Optional[bool] = None
-    proxy: Optional[Literal["basic", "stealth", "auto"]] = None
+    proxy: Optional[Literal["basic", "stealth", "enhanced", "auto"]] = None
     max_age: Optional[int] = None
     min_age: Optional[int] = None
     store_in_cache: Optional[bool] = None
@@ -555,7 +572,7 @@ class CrawlRequest(BaseModel):
     exclude_paths: Optional[List[str]] = None
     include_paths: Optional[List[str]] = None
     max_discovery_depth: Optional[int] = None
-    sitemap: Literal["skip", "include"] = "include"
+    sitemap: Literal["skip", "include", "only"] = "include"
     ignore_query_parameters: bool = False
     limit: Optional[int] = None
     crawl_entire_domain: bool = False
@@ -647,7 +664,7 @@ class CrawlParamsData(BaseModel):
     include_paths: Optional[List[str]] = None
     exclude_paths: Optional[List[str]] = None
     max_discovery_depth: Optional[int] = None
-    ignore_sitemap: bool = False
+    sitemap: Optional[Literal["skip", "include", "only"]] = None
     ignore_query_parameters: bool = False
     limit: Optional[int] = None
     crawl_entire_domain: bool = False
@@ -787,6 +804,7 @@ class AgentResponse(BaseModel):
     status: Optional[Literal["processing", "completed", "failed"]] = None
     data: Optional[Any] = None
     error: Optional[str] = None
+    model: Optional[Literal["spark-1-pro", "spark-1-mini"]] = None
     expires_at: Optional[datetime] = None
     credits_used: Optional[int] = None
 
