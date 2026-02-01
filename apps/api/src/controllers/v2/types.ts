@@ -771,6 +771,7 @@ const scrapeRequestSchemaBase = baseScrapeOptions.extend({
       auth: z.string(),
       requestId: z.string(),
       shouldBill: z.boolean(),
+      boostConcurrency: z.boolean().optional()
     })
     .optional(),
 });
@@ -1255,6 +1256,7 @@ export type TeamFlags = {
   crawlTtlHours?: number;
   ipWhitelist?: boolean;
   bypassCreditChecks?: boolean;
+  debugBranding?: boolean;
 } | null;
 
 interface RequestWithMaybeACUC<
