@@ -145,7 +145,7 @@ export interface ScrapeOptions {
   timeout?: number;
   waitFor?: number;
   mobile?: boolean;
-  parsers?: Array<string | { type: 'pdf'; maxPages?: number }>;
+  parsers?: Array<string | { type: 'pdf'; mode?: 'fast' | 'auto' | 'ocr'; maxPages?: number }>;
   actions?: ActionOption[];
   location?: LocationConfig;
   skipTlsVerification?: boolean;
@@ -462,6 +462,7 @@ export interface CrawlOptions {
   maxDiscoveryDepth?: number | null;
   sitemap?: 'skip' | 'include' | 'only';
   ignoreQueryParameters?: boolean;
+  deduplicateSimilarURLs?: boolean;
   limit?: number | null;
   crawlEntireDomain?: boolean;
   allowExternalLinks?: boolean;
@@ -470,6 +471,7 @@ export interface CrawlOptions {
   maxConcurrency?: number | null;
   webhook?: string | WebhookConfig | null;
   scrapeOptions?: ScrapeOptions | null;
+  regexOnFullURL?: boolean;
   zeroDataRetention?: boolean;
   integration?: string;
 }
@@ -682,4 +684,47 @@ export interface QueueStatusResponse {
   waitingJobsInQueue: number;
   maxConcurrency: number;
   mostRecentSuccess: string | null;
+}
+
+// Browser types
+export interface BrowserCreateResponse {
+  success: boolean;
+  id?: string;
+  cdpUrl?: string;
+  liveViewUrl?: string;
+  expiresAt?: string;
+  error?: string;
+}
+
+export interface BrowserExecuteResponse {
+  success: boolean;
+  stdout?: string;
+  result?: string;
+  stderr?: string;
+  exitCode?: number;
+  killed?: boolean;
+  error?: string;
+}
+
+export interface BrowserDeleteResponse {
+  success: boolean;
+  sessionDurationMs?: number;
+  creditsBilled?: number;
+  error?: string;
+}
+
+export interface BrowserSession {
+  id: string;
+  status: string;
+  cdpUrl: string;
+  liveViewUrl: string;
+  streamWebView: boolean;
+  createdAt: string;
+  lastActivity: string;
+}
+
+export interface BrowserListResponse {
+  success: boolean;
+  sessions?: BrowserSession[];
+  error?: string;
 }
