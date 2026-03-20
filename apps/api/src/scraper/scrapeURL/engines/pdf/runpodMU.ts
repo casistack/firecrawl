@@ -4,6 +4,7 @@ import * as marked from "marked";
 import { robustFetch } from "../../lib/fetch";
 import { z } from "zod";
 import path from "node:path";
+import { runSelfHostedOCRExperiment } from "./selfHostedOCR";
 import {
   getPdfResultFromCache,
   savePdfResultToCache,
@@ -15,6 +16,7 @@ export async function scrapePDFWithRunPodMU(
   tempFilePath: string,
   base64Content: string,
   maxPages?: number,
+  pagesProcessed?: number,
 ): Promise<PDFProcessorResult> {
   meta.logger.debug("Processing PDF document with RunPod MU", {
     tempFilePath,
@@ -170,6 +172,7 @@ export async function scrapePDFWithRunPodMU(
     meta.logger.child({ method: "scrapePDF/MUv1" }).warn("MU v1 failed", {
       durationMs,
       url: meta.rewrittenUrl ?? meta.url,
+      pagesProcessed,
     });
     throw new Error("RunPod MU failed to parse PDF");
   }
@@ -179,6 +182,7 @@ export async function scrapePDFWithRunPodMU(
     meta.logger.child({ method: "scrapePDF/MUv1" }).warn("MU v1 failed", {
       durationMs,
       url: meta.rewrittenUrl ?? meta.url,
+      pagesProcessed,
     });
     throw new Error("RunPod MU returned no result");
   }
@@ -204,7 +208,16 @@ export async function scrapePDFWithRunPodMU(
     meta.logger.child({ method: "scrapePDF/MUv1" }).info("MU v1 completed", {
       durationMs,
       url: meta.rewrittenUrl ?? meta.url,
+      pagesProcessed,
     });
+    if (!meta.internalOptions.zeroDataRetention) {
+      runSelfHostedOCRExperiment(
+        meta,
+        base64Content,
+        { markdown: result.markdown, durationMs },
+        maxPages,
+      );
+    }
   }
 
   return processorResult;

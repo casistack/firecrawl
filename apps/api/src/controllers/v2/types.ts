@@ -400,6 +400,13 @@ const attributesFormatWithOptions = z.strictObject({
 
 type AttributesFormatWithOptions = z.output<typeof attributesFormatWithOptions>;
 
+const queryFormatWithOptions = z.strictObject({
+  type: z.literal("query"),
+  prompt: z.string().max(10000),
+});
+
+type QueryFormatWithOptions = z.output<typeof queryFormatWithOptions>;
+
 export type FormatObject =
   | { type: "markdown" }
   | { type: "html" }
@@ -411,6 +418,7 @@ export type FormatObject =
   | ChangeTrackingFormatWithOptions
   | ScreenshotFormatWithOptions
   | AttributesFormatWithOptions
+  | QueryFormatWithOptions
   | { type: "branding" };
 
 const pdfModeSchema = z.enum(["fast", "auto", "ocr"]);
@@ -519,6 +527,7 @@ const baseScrapeOptions = z.strictObject({
           screenshotFormatWithOptions,
           attributesFormatWithOptions,
           z.strictObject({ type: z.literal("branding") }),
+          queryFormatWithOptions,
         ])
         .array()
         .optional()
@@ -991,6 +1000,7 @@ export type Document = {
   extract?: any;
   json?: any;
   summary?: string;
+  answer?: string;
   branding?: BrandingProfile;
   warning?: string;
   attributes?: {
@@ -1094,6 +1104,8 @@ export type ErrorResponse = {
   code?: ErrorCodes;
   error: string;
   details?: any;
+  sponsor_status?: string;
+  login_url?: string;
 };
 
 export type ScrapeResponse =
@@ -1226,6 +1238,16 @@ export type CrawlStatusResponse =
       next?: string;
       data: Document[];
       warning?: string;
+    }
+  | {
+      success: false;
+      status: "failed";
+      error: string;
+      completed: number;
+      total: number;
+      creditsUsed: number;
+      expiresAt: string;
+      data: Document[];
     };
 
 export type OngoingCrawlsResponse =
@@ -1256,6 +1278,7 @@ export type CrawlErrorsResponse =
 
 type AuthObject = {
   team_id: string;
+  org_id?: string | null;
 };
 
 type Account = {
@@ -1267,6 +1290,8 @@ export type TeamFlags = {
   unblockedDomains?: string[];
   forceZDR?: boolean;
   allowZDR?: boolean;
+  scrapeZDR?: "disabled" | "allowed" | "forced";
+  searchZDR?: "disabled" | "allowed" | "forced";
   zdrCost?: number;
   checkRobotsOnScrape?: boolean;
   crawlTtlHours?: number;
@@ -1660,6 +1685,7 @@ export const searchRequestSchema = z
                 z.strictObject({ type: z.literal("images") }),
                 z.strictObject({ type: z.literal("summary") }),
                 jsonFormatWithOptions,
+                queryFormatWithOptions,
                 screenshotFormatWithOptions,
               ])
               .array()

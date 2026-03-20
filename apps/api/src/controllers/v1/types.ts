@@ -1081,6 +1081,8 @@ export type ErrorResponse = {
   code?: ErrorCodes;
   error: string;
   details?: any;
+  sponsor_status?: string;
+  login_url?: string;
 };
 
 export type ScrapeResponse =
@@ -1180,6 +1182,16 @@ export type CrawlStatusResponse =
       expiresAt: string;
       next?: string;
       data: Document[];
+    }
+  | {
+      success: false;
+      status: "failed";
+      error: string;
+      completed: number;
+      total: number;
+      creditsUsed: number;
+      expiresAt: string;
+      data: Document[];
     };
 
 export type OngoingCrawlsResponse =
@@ -1209,6 +1221,7 @@ export type CrawlErrorsResponse =
 
 type AuthObject = {
   team_id: string;
+  org_id?: string | null;
 };
 
 type Account = {
@@ -1219,6 +1232,7 @@ export type AuthCreditUsageChunk = {
   api_key: string;
   api_key_id: number;
   team_id: string;
+  org_id?: string | null;
   sub_id: string | null;
   sub_current_period_start: string | null;
   sub_current_period_end: string | null;
@@ -1255,6 +1269,13 @@ export type AuthCreditUsageChunk = {
 
   // appended on JS-side
   is_extract?: boolean;
+
+  // Agent signup: populated when the key is agent-provisioned
+  _agentSponsor?: {
+    status: "pending" | "verified" | "blocked";
+    verification_deadline: string;
+    email: string;
+  } | null;
 };
 
 export type TeamFlags = {
@@ -1262,6 +1283,8 @@ export type TeamFlags = {
   unblockedDomains?: string[];
   forceZDR?: boolean;
   allowZDR?: boolean;
+  scrapeZDR?: "disabled" | "allowed" | "forced";
+  searchZDR?: "disabled" | "allowed" | "forced";
   zdrCost?: number;
   checkRobotsOnScrape?: boolean;
   crawlTtlHours?: number;
