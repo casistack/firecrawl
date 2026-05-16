@@ -14,7 +14,12 @@ import {
   generateDomainSplits,
   addOMCEJob,
 } from "../../../../services";
-import { AgentIndexOnlyError, EngineError, IndexMissError, NoCachedDataError } from "../../error";
+import {
+  AgentIndexOnlyError,
+  EngineError,
+  IndexMissError,
+  NoCachedDataError,
+} from "../../error";
 import { shouldParsePDF } from "../../../../controllers/v2/types";
 import { hasFormatOfType } from "../../../../lib/format-utils";
 
@@ -27,6 +32,7 @@ export async function sendDocumentToIndex(meta: Meta, document: Document) {
 
   const shouldCache =
     meta.options.storeInCache &&
+    !meta.internalOptions.isParse &&
     !meta.internalOptions.zeroDataRetention &&
     meta.winnerEngine !== "index" &&
     meta.winnerEngine !== "index;documents" &&
@@ -48,7 +54,8 @@ export async function sendDocumentToIndex(meta: Meta, document: Document) {
     !meta.featureFlags.has("actions") &&
     !hasCustomScreenshotSettings &&
     (meta.options.headers === undefined ||
-      Object.keys(meta.options.headers).length === 0);
+      Object.keys(meta.options.headers).length === 0) &&
+    meta.options.profile === undefined;
 
   if (!shouldCache) {
     return document;
@@ -95,6 +102,7 @@ export async function sendDocumentToIndex(meta: Meta, document: Document) {
               : undefined,
           contentType: document.metadata.contentType,
           postprocessorsUsed: document.metadata.postprocessorsUsed,
+          proxyUsed: document.metadata.proxyUsed,
         });
       } catch (error) {
         meta.logger.error("Failed to save document to index", {
@@ -397,7 +405,9 @@ export async function scrapeURLWithIndex(
 
     postprocessorsUsed: doc.postprocessorsUsed,
 
-    proxyUsed: doc.proxyUsed ?? "basic",
+    proxyUsed:
+      doc.proxyUsed ??
+      (meta.featureFlags.has("stealthProxy") ? "stealth" : "basic"), // this can be dropped after june 2026, it's here to backfill proxyUsed for older index entries that don't have it
   };
 }
 

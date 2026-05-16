@@ -1,6 +1,6 @@
 # Firecrawl Node SDK
 
-The Firecrawl Node SDK is a library that allows you to easily scrape and crawl websites, and output the data in a format ready for use with language models (LLMs). It provides a simple and intuitive interface for interacting with the Firecrawl API.
+The Firecrawl Node SDK is a library that lets you easily search, scrape, and interact with the web for AI agents — returning clean Markdown or structured data your agents can ship with. It provides a simple and intuitive interface for the Firecrawl API.
 
 ## Installation
 
@@ -44,6 +44,38 @@ To scrape a single URL with error handling, use the `scrape` method. It takes th
 ```js
 const url = 'https://example.com';
 const scrapedData = await app.scrape(url);
+```
+
+### Video extraction
+
+Use the `video` format on supported video URLs, including YouTube and TikTok. The returned `video` field is a signed URL to the extracted video file.
+
+```js
+const doc = await app.scrape('https://www.youtube.com/watch?v=dQw4w9WgXcQ', {
+  formats: ['video'],
+});
+
+console.log(doc.video);
+```
+
+### Parsing uploaded files
+
+Use `parse` to upload a file (`html`, `pdf`, `docx`, etc.) as multipart form data and process it through the same parsing pipeline.
+Parse does not support browser-only formats/options like `changeTracking`, `screenshot`, `branding`, `audio`, `video`, `actions`, `waitFor`, `location`, or `mobile`.
+
+```js
+const parsed = await app.parse(
+  {
+    data: '<html><body><h1>Hello parse</h1></body></html>',
+    filename: 'upload.html',
+    contentType: 'text/html',
+  },
+  {
+    formats: ['markdown'],
+  }
+);
+
+console.log(parsed.markdown);
 ```
 
 ### Crawling a Website
@@ -108,6 +140,28 @@ Use `map` to generate a list of URLs from a website. Options let you customize t
 ```js
 const mapResult = await app.map('https://example.com');
 console.log(mapResult);
+```
+
+### Scrape-bound interactive browsing (v2)
+
+Use a scrape job ID to keep interacting with the replayed browser context:
+
+```js
+const doc = await app.scrape('https://example.com', {
+  actions: [{ type: 'click', selector: 'a[href="/pricing"]' }],
+});
+
+const scrapeJobId = doc?.metadata?.scrapeId;
+if (!scrapeJobId) throw new Error('Missing scrapeId');
+
+const run = await app.interact(scrapeJobId, {
+  code: 'console.log(await page.url())',
+  language: 'node',
+  timeout: 60,
+});
+console.log(run.stdout);
+
+await app.stopInteraction(scrapeJobId);
 ```
 
 ### Crawl a website with real‑time updates

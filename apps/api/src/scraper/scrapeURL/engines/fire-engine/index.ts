@@ -37,6 +37,7 @@ import { withSpan, setSpanAttributes } from "../../../../lib/otel-tracer";
 import { getBrandingScript } from "./brandingScript";
 import { abTestFireEngine } from "../../../../services/ab-test";
 import { scheduleABComparison } from "../../../../services/ab-test-comparison";
+import { createHash } from "node:crypto";
 
 /** Default wait (ms) before running the branding script when user did not set waitFor. Lets the page settle so DOM/images are ready and reduces JS errors. */
 const BRANDING_DEFAULT_WAIT_MS = 2000;
@@ -263,6 +264,12 @@ export async function scrapeURLWithFireEngineChromeCDP(
       "engine.team_id": meta.internalOptions.teamId,
     });
     const hasBranding = hasFormatOfType(meta.options.formats, "branding");
+    const hasAudio = hasFormatOfType(meta.options.formats, "audio");
+    const hasVideo = hasFormatOfType(meta.options.formats, "video");
+    const shouldRunYoutubePostprocessor = youtubePostprocessor.shouldRun(
+      meta,
+      new URL(meta.rewrittenUrl ?? meta.url),
+    );
     const defaultWait = hasBranding ? BRANDING_DEFAULT_WAIT_MS : 0;
     const effectiveWait =
       meta.options.waitFor != null && meta.options.waitFor !== 0
@@ -315,6 +322,14 @@ export async function scrapeURLWithFireEngineChromeCDP(
             },
           ]
         : []),
+      ...(hasAudio || hasVideo || shouldRunYoutubePostprocessor
+        ? ([
+            {
+              type: "getCookies",
+              metadata: { __firecrawl_internal: true },
+            },
+          ] as unknown as InternalAction[])
+        : []),
     ];
 
     const totalWait = actions.reduce(
@@ -324,10 +339,7 @@ export async function scrapeURLWithFireEngineChromeCDP(
 
     const shouldAllowMedia =
       hasFormatOfType(meta.options.formats, "branding") ||
-      youtubePostprocessor.shouldRun(
-        meta,
-        new URL(meta.rewrittenUrl ?? meta.url),
-      );
+      shouldRunYoutubePostprocessor;
 
     const request: FireEngineScrapeRequestCommon &
       FireEngineScrapeRequestChromeCDP = {
@@ -353,6 +365,11 @@ export async function scrapeURLWithFireEngineChromeCDP(
         meta.internalOptions.saveScrapeResultToGCS,
       zeroDataRetention: meta.internalOptions.zeroDataRetention,
       ...(shouldAllowMedia ? { blockMedia: false } : {}),
+      persistentStorage: meta.options.profile
+        ? {
+            uniqueId: `${createHash("sha256").update(meta.internalOptions.teamId).digest("hex").slice(0, 16)}_${meta.options.profile.name}`,
+          }
+        : undefined,
     };
 
     let response = await performFireEngineScrape(
@@ -415,6 +432,9 @@ export async function scrapeURLWithFireEngineChromeCDP(
           };
         }
       });
+    const audioCookies = (response.actionResults ?? [])
+      .filter(x => x.type === "getCookies")
+      .flatMap(x => x.result.cookies);
 
     return {
       url: response.url ?? meta.url,
@@ -445,6 +465,9 @@ export async function scrapeURLWithFireEngineChromeCDP(
       proxyUsed: response.usedMobileProxy ? "stealth" : "basic",
       youtubeTranscriptContent: response.youtubeTranscriptContent,
       timezone: response.timezone,
+      ...(hasAudio || hasVideo || shouldRunYoutubePostprocessor
+        ? { audioCookies }
+        : {}),
     };
   });
 }

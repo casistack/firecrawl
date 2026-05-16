@@ -6,8 +6,11 @@ export type BillingEndpoint =
   | "deep_research"
   | "extract"
   | "fireclaw"
+  | "interact"
   | "llms_txt"
   | "map"
+  | "monitor"
+  | "parse"
   | "scrape"
   | "search";
 
