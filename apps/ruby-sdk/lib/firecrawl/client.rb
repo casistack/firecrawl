@@ -39,9 +39,10 @@ module Firecrawl
       backoff_factor: DEFAULT_BACKOFF_FACTOR
     )
       resolved_key = api_key || ENV["FIRECRAWL_API_KEY"]
-      if resolved_key.nil? || resolved_key.strip.empty?
-        raise FirecrawlError, "API key is required. Provide api_key: or set FIRECRAWL_API_KEY environment variable."
-      end
+      # A nil/empty key is allowed: scrape, search, and interact fall back to the
+      # keyless free tier (rate-limited per IP). Other methods return 401 from the
+      # API until a key is provided.
+      resolved_key = nil if resolved_key.nil? || resolved_key.strip.empty?
 
       resolved_url = api_url || ENV["FIRECRAWL_API_URL"] || DEFAULT_API_URL
       unless resolved_url.match?(%r{\Ahttps?://}i)
@@ -78,6 +79,7 @@ module Firecrawl
 
       body = { "url" => url }
       body.merge!(options.to_h) if options
+      body["origin"] ||= "ruby-sdk@#{Firecrawl::VERSION}"
       raw = @http.post("/v2/scrape", body)
       data = raw["data"] || raw
       Models::Document.new(data)
@@ -96,6 +98,7 @@ module Firecrawl
 
       body = { "code" => code, "language" => language }
       body["timeout"] = timeout if timeout
+      body["origin"] ||= "ruby-sdk@#{Firecrawl::VERSION}"
       @http.post("/v2/scrape/#{job_id}/interact", body)
     end
 
@@ -285,7 +288,8 @@ module Firecrawl
     # MONITOR
     # ================================================================
 
-    def create_monitor(name:, schedule:, targets:, webhook: nil, notification: nil, retention_days: nil)
+    def create_monitor(name:, schedule:, targets:, webhook: nil, notification: nil,
+                       retention_days: nil, goal: nil, judge_enabled: nil)
       body = {
         "name" => name,
         "schedule" => schedule,
@@ -293,6 +297,8 @@ module Firecrawl
         "webhook" => webhook,
         "notification" => notification,
         "retentionDays" => retention_days,
+        "goal" => goal,
+        "judgeEnabled" => judge_enabled,
       }.compact
       raw = @http.post("/v2/monitor", body)
       Models::Monitor.new(raw["data"] || raw)
@@ -321,6 +327,8 @@ module Firecrawl
         "notification" => attrs[:notification],
         "targets" => attrs[:targets],
         "retentionDays" => attrs[:retention_days],
+        "goal" => attrs[:goal],
+        "judgeEnabled" => attrs[:judge_enabled],
       }.compact
       raw = @http.patch("/v2/monitor/#{monitor_id}", body)
       Models::Monitor.new(raw["data"] || raw)
@@ -372,6 +380,7 @@ module Firecrawl
 
       body = { "query" => query }
       body.merge!(options.to_h) if options
+      body["origin"] ||= "ruby-sdk@#{Firecrawl::VERSION}"
       raw = @http.post("/v2/search", body)
       data = raw["data"] || raw
       Models::SearchData.new(data)
