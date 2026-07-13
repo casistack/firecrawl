@@ -112,9 +112,81 @@ final class FirecrawlClient
         }
         $body['origin'] ??= 'php-sdk@' . Version::SDK_VERSION;
 
-        $response = $this->http->post('/v2/scrape', $body);
+        $response = $this->assertSuccess($this->http->post('/v2/scrape', $body));
 
         return Document::fromArray($response['data'] ?? $response);
+    }
+
+    /**
+     * Search research papers.
+     *
+     * @param array<string, mixed> $options
+     * @return array<string, mixed>
+     */
+    public function searchPapers(string $query, array $options = []): array
+    {
+        return $this->http->get('/v2/search/research/papers' . $this->queryArray(array_merge(
+            ['query' => $query, 'origin' => 'php-sdk@' . Version::SDK_VERSION],
+            $options,
+        )));
+    }
+
+    /**
+     * Inspect paper metadata.
+     *
+     * @return array<string, mixed>
+     */
+    public function inspectPaper(string $paperId): array
+    {
+        return $this->http->get('/v2/search/research/papers/' . rawurlencode($paperId));
+    }
+
+    /**
+     * Read a paper with query-guided passages.
+     *
+     * @param array<string, mixed> $options
+     * @return array<string, mixed>
+     */
+    public function readPaper(string $paperId, string $query, array $options = []): array
+    {
+        return $this->http->get(
+            '/v2/search/research/papers/' . rawurlencode($paperId)
+            . $this->queryArray(array_merge(
+                ['query' => $query, 'origin' => 'php-sdk@' . Version::SDK_VERSION],
+                $options,
+            )),
+        );
+    }
+
+    /**
+     * Find papers related to a paper.
+     *
+     * @param array<string, mixed> $options
+     * @return array<string, mixed>
+     */
+    public function relatedPapers(string $paperId, string $intent, array $options = []): array
+    {
+        return $this->http->get(
+            '/v2/search/research/papers/' . rawurlencode($paperId) . '/similar'
+            . $this->queryArray(array_merge(
+                ['intent' => $intent, 'origin' => 'php-sdk@' . Version::SDK_VERSION],
+                $options,
+            )),
+        );
+    }
+
+    /**
+     * Search GitHub research content.
+     *
+     * @param array<string, mixed> $options
+     * @return array<string, mixed>
+     */
+    public function searchGithub(string $query, array $options = []): array
+    {
+        return $this->http->get('/v2/search/research/github' . $this->queryArray(array_merge(
+            ['query' => $query, 'origin' => 'php-sdk@' . Version::SDK_VERSION],
+            $options,
+        )));
     }
 
     /**
@@ -187,22 +259,34 @@ final class FirecrawlClient
     /**
      * Start an async crawl job and return immediately.
      */
-    public function startCrawl(string $url, ?CrawlOptions $options = null): CrawlResponse
-    {
+    public function startCrawl(
+        string $url,
+        ?CrawlOptions $options = null,
+        ?float $requestTimeoutSeconds = null,
+    ): CrawlResponse {
         $body = ['url' => $url];
+        $extraHeaders = [];
+
         if ($options !== null) {
+            $idempotencyKey = $options->getIdempotencyKey();
+            if ($idempotencyKey !== null && $idempotencyKey !== '') {
+                $extraHeaders['x-idempotency-key'] = $idempotencyKey;
+            }
+
             $body = array_merge($body, $options->toArray());
         }
 
-        return CrawlResponse::fromArray($this->http->post('/v2/crawl', $body));
+        return CrawlResponse::fromArray(
+            $this->http->post('/v2/crawl', $body, $extraHeaders, $requestTimeoutSeconds),
+        );
     }
 
     /**
      * Get the status and results of a crawl job.
      */
-    public function getCrawlStatus(string $jobId): CrawlJob
+    public function getCrawlStatus(string $jobId, ?float $requestTimeoutSeconds = null): CrawlJob
     {
-        return CrawlJob::fromArray($this->http->get("/v2/crawl/{$jobId}"));
+        return CrawlJob::fromArray($this->http->get("/v2/crawl/{$jobId}", $requestTimeoutSeconds));
     }
 
     /**
@@ -315,7 +399,7 @@ final class FirecrawlClient
             $body = array_merge($body, $options->toArray());
         }
 
-        $response = $this->http->post('/v2/map', $body);
+        $response = $this->assertSuccess($this->http->post('/v2/map', $body));
 
         return MapData::fromArray($response['data'] ?? $response);
     }
@@ -328,7 +412,14 @@ final class FirecrawlClient
      * Create a scheduled monitor.
      *
      * @param array<string, mixed>       $schedule
-     * @param list<array<string, mixed>> $targets
+     * @param list<array<string, mixed>> $targets Each target array has a
+     *     `type` of `scrape`, `crawl`, or `search`, plus an optional
+     *     `id`. `scrape`/`crawl` targets carry `urls`/`url` and
+     *     `scrapeOptions`/`crawlOptions`. `search` targets carry
+     *     `queries` (list<string>, required) and optional
+     *     `searchWindow` (one of `5m`, `15m`, `1h`, `6h`, `24h`, `7d`),
+     *     `includeDomains` (list<string>), `excludeDomains`
+     *     (list<string>), and `maxResults` (int). All keys are camelCase.
      * @param array<string, mixed>|null  $webhook
      * @param array<string, mixed>|null  $notification
      */
@@ -475,7 +566,7 @@ final class FirecrawlClient
         }
         $body['origin'] ??= 'php-sdk@' . Version::SDK_VERSION;
 
-        $response = $this->http->post('/v2/search', $body);
+        $response = $this->assertSuccess($this->http->post('/v2/search', $body));
 
         return SearchData::fromArray($response['data'] ?? $response);
     }
@@ -651,6 +742,32 @@ final class FirecrawlClient
     }
 
     /**
+     * The API reports some failures (e.g. DNS resolution errors) as HTTP 200
+     * with a `success: false` body; the flag, not the status code, is the
+     * error signal for those.
+     *
+     * Only the synchronous endpoints (scrape, search, map) run this check.
+     * Async crawl responses skip it deliberately: a failed start yields a
+     * null job ID that callers guard (pollCrawl() throws on it), and status
+     * polling exposes `status` explicitly on CrawlJob.
+     *
+     * @param array<string, mixed> $response
+     * @return array<string, mixed> the same response, if it does not signal failure
+     */
+    private function assertSuccess(array $response): array
+    {
+        if (($response['success'] ?? null) === false) {
+            $error = $response['error'] ?? null;
+
+            throw new FirecrawlException(is_string($error) && $error !== ''
+                ? $error
+                : 'The API reported the request as unsuccessful.');
+        }
+
+        return $response;
+    }
+
+    /**
      * @param array<string, scalar|null> $params
      */
     private function query(array $params): string
@@ -658,6 +775,29 @@ final class FirecrawlClient
         $params = array_filter($params, static fn ($value) => $value !== null && $value !== '');
 
         return $params === [] ? '' : '?' . http_build_query($params);
+    }
+
+    /**
+     * @param array<string, mixed> $params
+     */
+    private function queryArray(array $params): string
+    {
+        $pairs = [];
+        foreach ($params as $key => $value) {
+            if ($value === null || $value === '') {
+                continue;
+            }
+            $values = is_array($value) ? $value : [$value];
+            foreach ($values as $item) {
+                if ($item === null || $item === '') {
+                    continue;
+                }
+                $stringValue = is_bool($item) ? ($item ? 'true' : 'false') : (string) $item;
+                $pairs[] = rawurlencode((string) $key) . '=' . rawurlencode($stringValue);
+            }
+        }
+
+        return $pairs === [] ? '' : '?' . implode('&', $pairs);
     }
 
     private function pollCrawl(

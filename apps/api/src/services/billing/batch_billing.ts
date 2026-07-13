@@ -1,10 +1,8 @@
 import { logger } from "../../lib/logger";
-import { config } from "../../config";
 import { getRedisConnection } from "../queue-service";
-import { billTeam6 } from "../../db/rpc";
+import { billTeam7 } from "../../db/rpc";
 import * as Sentry from "@sentry/node";
 import { withAuth } from "../../lib/withAuth";
-import { setCachedACUC, setCachedACUCTeam } from "../../controllers/auth";
 import {
   autumnService,
   featureIdForBillingEndpoint,
@@ -104,7 +102,7 @@ async function refundRequestTrackedCredits(group: GroupedBillingOperation) {
 
 /**
  * Dequeues pending billing operations from Redis, groups them by team, and
- * commits each group to Supabase via the `bill_team_6` RPC.
+ * commits each group to Supabase via the `bill_team_7` RPC.
  */
 export async function processBillingBatch() {
   const redis = getRedisConnection();
@@ -180,10 +178,6 @@ export async function processBillingBatch() {
         continue;
       }
 
-      const batchTrackedCredits = group.operations
-        .filter(op => !op.autumnTrackInRequest)
-        .reduce((sum, op) => sum + op.credits, 0);
-
       try {
         // Execute the actual billing
         const billingResult = await withAuth(supaBillTeam, {
@@ -215,19 +209,7 @@ export async function processBillingBatch() {
           `✅ Successfully billed team ${group.team_id} for ${group.total_credits} credits`,
         );
 
-        if (batchTrackedCredits > 0) {
-          await autumnService.trackCredits({
-            teamId: group.team_id,
-            value: batchTrackedCredits,
-            properties: {
-              source: "processBillingBatch",
-              ...toAutumnBillingProperties(group.billing),
-              apiKeyId: group.api_key_id,
-              subscriptionId: group.subscription_id,
-            },
-            featureId: featureIdForBillingEndpoint(group.billing.endpoint),
-          });
-        }
+        // Ledger commit only — usage is tracked to Autumn at request time, not here.
       } catch (error) {
         await refundRequestTrackedCredits(group);
         logger.error(`❌ Failed to bill team ${group.team_id}`, {
@@ -336,38 +318,6 @@ export async function queueBillingOperation(
       );
       await processBillingBatch();
     }
-    // TODO is there a better way to do this?
-
-    // Update cached credits used immediately to provide accurate feedback to users
-    // This is optimistic - actual billing happens in batch
-    // Should we add this?
-    // I guess batch is fast enough that it's fine
-
-    // if (config.USE_DB_AUTHENTICATION) {
-    //   (async () => {
-    //     // Get API keys for this team to update in cache
-    //     const { data } = await supabase_service
-    //       .from("api_keys")
-    //       .select("key")
-    //       .eq("team_id", team_id);
-
-    //     for (const apiKey of (data ?? []).map(x => x.key)) {
-    //       await setCachedACUC(apiKey, (acuc) =>
-    //         acuc
-    //           ? {
-    //               ...acuc,
-    //               credits_used: acuc.credits_used + credits,
-    //               adjusted_credits_used: acuc.adjusted_credits_used + credits,
-    //               remaining_credits: acuc.remaining_credits - credits,
-    //             }
-    //           : null,
-    //       );
-    //     }
-    //   })().catch(error => {
-    //     logger.error("Failed to update cached credits", { error, team_id });
-    //   });
-    // }
-
     return { success: true };
   } catch (error) {
     logger.error("Error queueing billing operation", { error, team_id });
@@ -408,10 +358,9 @@ async function supaBillTeam(
   // Perform the actual database operation
   let data: { api_key: string }[];
   try {
-    data = await billTeam6({
+    data = await billTeam7({
       team_id,
       subscription_id: subscription_id ?? null,
-      fetch_subscription: subscription_id === undefined,
       credits,
       api_key_id: api_key_id ?? null,
       is_extract,
@@ -421,42 +370,6 @@ async function supaBillTeam(
     _logger.error("Failed to bill team.", { error });
     return { success: false, error };
   }
-
-  // Fire-and-forget — a Redis failure here must not trigger a false Autumn refund
-  // after bill_team_6 has already committed.
-  getRedisConnection()
-    .sadd("billed_teams", team_id)
-    .catch(err => {
-      _logger.warn("Failed to add team to billed_teams set", { err, team_id });
-    });
-
-  // Update cached ACUC to reflect the new credit usage
-  (async () => {
-    for (const apiKey of (data ?? []).map(x => x.api_key)) {
-      await setCachedACUC(apiKey, is_extract, acuc =>
-        acuc
-          ? {
-              ...acuc,
-              credits_used: acuc.credits_used + credits,
-              adjusted_credits_used: acuc.adjusted_credits_used + credits,
-              remaining_credits: acuc.remaining_credits - credits,
-            }
-          : null,
-      );
-      await setCachedACUCTeam(team_id, is_extract, acuc =>
-        acuc
-          ? {
-              ...acuc,
-              credits_used: acuc.credits_used + credits,
-              adjusted_credits_used: acuc.adjusted_credits_used + credits,
-              remaining_credits: acuc.remaining_credits - credits,
-            }
-          : null,
-      );
-    }
-  })().catch(error => {
-    _logger.error("Failed to update cached credits", { error, team_id });
-  });
 
   return { success: true, data };
 }

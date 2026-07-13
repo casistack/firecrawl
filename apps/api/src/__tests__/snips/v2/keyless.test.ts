@@ -8,6 +8,9 @@ import {
   scrapeTimeout,
 } from "../lib";
 import { redisRateLimitClient } from "../../../services/rate-limiter";
+import { db } from "../../../db/connection";
+import * as schema from "../../../db/schema";
+import { and, desc, eq, gt } from "drizzle-orm";
 import request from "supertest";
 
 // The keyless tier is disabled unless both limits are configured. The harness
@@ -100,7 +103,11 @@ describeIf(KEYLESS_ENABLED)("Keyless free tier", () => {
 
     expect(response.statusCode).toBe(401);
     expect(response.body.success).toBe(false);
-    expect(response.body.error).toContain("not available without an API key");
+    expect(response.body.error).toContain(
+      "not supported by the keyless free tier",
+    );
+    expect(response.body.error).toContain("https://www.firecrawl.dev/signin");
+    expect(response.body.error).toContain("Authorization: Bearer YOUR_API_KEY");
   });
 
   it(
@@ -149,7 +156,9 @@ describeIf(KEYLESS_ENABLED)("Keyless free tier", () => {
       .send({ origin: "mcp" });
 
     expect(blocked.statusCode).toBe(429);
-    expect(blocked.body.error).toContain("unauthenticated requests");
+    expect(blocked.body.error).toContain("keyless free tier rate limit");
+    expect(blocked.body.error).toContain("https://www.firecrawl.dev/signin");
+    expect(blocked.body.error).toContain("Authorization: Bearer YOUR_API_KEY");
     // Out of quota → emit the OAuth-discovery header so agents find the key flow.
     expect(blocked.headers["www-authenticate"]).toContain("resource_metadata");
   });
@@ -172,7 +181,9 @@ describeIf(KEYLESS_ENABLED)("Keyless free tier", () => {
       .send({ origin: "mcp" });
 
     expect(blocked.statusCode).toBe(429);
-    expect(blocked.body.error).toContain("unauthenticated credits");
+    expect(blocked.body.error).toContain("keyless free tier rate limit");
+    expect(blocked.body.error).toContain("https://www.firecrawl.dev/signin");
+    expect(blocked.body.error).toContain("Authorization: Bearer YOUR_API_KEY");
   });
 
   it("enforces the daily credit cap on parse (429)", async () => {
@@ -199,7 +210,9 @@ describeIf(KEYLESS_ENABLED)("Keyless free tier", () => {
       });
 
     expect(blocked.statusCode).toBe(429);
-    expect(blocked.body.error).toContain("unauthenticated credits");
+    expect(blocked.body.error).toContain("keyless free tier rate limit");
+    expect(blocked.body.error).toContain("https://www.firecrawl.dev/signin");
+    expect(blocked.body.error).toContain("Authorization: Bearer YOUR_API_KEY");
   });
 
   it(
@@ -239,7 +252,11 @@ describeIf(KEYLESS_ENABLED)("Keyless free tier", () => {
         });
 
       expect(blocked.statusCode).toBe(429);
-      expect(blocked.body.error).toContain("unauthenticated credits");
+      expect(blocked.body.error).toContain("keyless free tier rate limit");
+      expect(blocked.body.error).toContain("https://www.firecrawl.dev/signin");
+      expect(blocked.body.error).toContain(
+        "Authorization: Bearer YOUR_API_KEY",
+      );
       expect(blocked.headers["www-authenticate"]).toContain(
         "resource_metadata",
       );
@@ -279,7 +296,11 @@ describeIf(KEYLESS_ENABLED)("Keyless free tier", () => {
         });
 
       expect(blocked.statusCode).toBe(429);
-      expect(blocked.body.error).toContain("unauthenticated credits");
+      expect(blocked.body.error).toContain("keyless free tier rate limit");
+      expect(blocked.body.error).toContain("https://www.firecrawl.dev/signin");
+      expect(blocked.body.error).toContain(
+        "Authorization: Bearer YOUR_API_KEY",
+      );
       expect(blocked.headers["www-authenticate"]).toContain(
         "resource_metadata",
       );
@@ -317,7 +338,11 @@ describeIf(KEYLESS_ENABLED)("Keyless free tier", () => {
         });
 
       expect(blocked.statusCode).toBe(429);
-      expect(blocked.body.error).toContain("unauthenticated credits");
+      expect(blocked.body.error).toContain("keyless free tier rate limit");
+      expect(blocked.body.error).toContain("https://www.firecrawl.dev/signin");
+      expect(blocked.body.error).toContain(
+        "Authorization: Bearer YOUR_API_KEY",
+      );
       expect(blocked.headers["www-authenticate"]).toContain(
         "resource_metadata",
       );
@@ -360,6 +385,63 @@ describeIf(KEYLESS_ENABLED)("Keyless free tier", () => {
   );
 
   it(
+    "writes a keyless_credit_usage audit row for a successful keyless scrape (200)",
+    async () => {
+      // The audit insert is best-effort and fire-and-forget in the controller,
+      // so capture the latest id first, then poll for a newer row afterwards.
+      const beforeMaxId = (
+        await db
+          .select({ id: schema.keyless_credit_usage.id })
+          .from(schema.keyless_credit_usage)
+          .orderBy(desc(schema.keyless_credit_usage.id))
+          .limit(1)
+      )[0]?.id;
+
+      const response = await request(TEST_API_URL)
+        .post("/v2/scrape")
+        .set("Content-Type", "application/json")
+        .send({
+          url: TEST_SUITE_WEBSITE,
+          origin: "mcp",
+          formats: ["markdown"],
+        });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.body.success).toBe(true);
+      const creditsUsed = response.body.data.metadata.creditsUsed;
+      expect(creditsUsed).toBeGreaterThan(0);
+
+      const ip = await currentKeylessIp();
+
+      let row: typeof schema.keyless_credit_usage.$inferSelect | undefined;
+      for (let i = 0; i < 20; i++) {
+        const rows = await db
+          .select()
+          .from(schema.keyless_credit_usage)
+          .where(
+            and(
+              eq(schema.keyless_credit_usage.ip, ip),
+              beforeMaxId !== undefined
+                ? gt(schema.keyless_credit_usage.id, beforeMaxId)
+                : undefined,
+            ),
+          )
+          .orderBy(desc(schema.keyless_credit_usage.id))
+          .limit(1);
+        if (rows.length > 0) {
+          row = rows[0];
+          break;
+        }
+        await new Promise(resolve => setTimeout(resolve, 250));
+      }
+
+      expect(row).toBeDefined();
+      expect(row!.credits_used).toBe(creditsUsed);
+    },
+    scrapeTimeout,
+  );
+
+  it(
     "rejects projected keyless search with scrape options before search (429)",
     async () => {
       await request(TEST_API_URL)
@@ -386,7 +468,11 @@ describeIf(KEYLESS_ENABLED)("Keyless free tier", () => {
         });
 
       expect(blocked.statusCode).toBe(429);
-      expect(blocked.body.error).toContain("unauthenticated credits");
+      expect(blocked.body.error).toContain("keyless free tier rate limit");
+      expect(blocked.body.error).toContain("https://www.firecrawl.dev/signin");
+      expect(blocked.body.error).toContain(
+        "Authorization: Bearer YOUR_API_KEY",
+      );
       expect(blocked.headers["www-authenticate"]).toContain(
         "resource_metadata",
       );
@@ -421,7 +507,11 @@ describeIf(KEYLESS_ENABLED)("Keyless free tier", () => {
         });
 
       expect(blocked.statusCode).toBe(429);
-      expect(blocked.body.error).toContain("unauthenticated credits");
+      expect(blocked.body.error).toContain("keyless free tier rate limit");
+      expect(blocked.body.error).toContain("https://www.firecrawl.dev/signin");
+      expect(blocked.body.error).toContain(
+        "Authorization: Bearer YOUR_API_KEY",
+      );
       expect(blocked.headers["www-authenticate"]).toContain(
         "resource_metadata",
       );
@@ -468,7 +558,11 @@ describeIf(KEYLESS_ENABLED)("Keyless free tier", () => {
         .set("x-firecrawl-keyless-ip", fakeIp)
         .send({ origin: "mcp" });
       expect(blocked.statusCode).toBe(429);
-      expect(blocked.body.error).toContain("unauthenticated credits");
+      expect(blocked.body.error).toContain("keyless free tier rate limit");
+      expect(blocked.body.error).toContain("https://www.firecrawl.dev/signin");
+      expect(blocked.body.error).toContain(
+        "Authorization: Bearer YOUR_API_KEY",
+      );
 
       // Without the secret, the forwarded IP is ignored (keyed on the real IP).
       const allowed = await request(TEST_API_URL)
@@ -587,7 +681,11 @@ describeIf(KEYLESS_ENABLED)("Keyless free tier", () => {
         .send({ code: "return 1;", origin: "mcp" });
 
       expect(blocked.statusCode).toBe(429);
-      expect(blocked.body.error).toContain("unauthenticated credits");
+      expect(blocked.body.error).toContain("keyless free tier rate limit");
+      expect(blocked.body.error).toContain("https://www.firecrawl.dev/signin");
+      expect(blocked.body.error).toContain(
+        "Authorization: Bearer YOUR_API_KEY",
+      );
       expect(blocked.headers["www-authenticate"]).toContain(
         "resource_metadata",
       );

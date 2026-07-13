@@ -26,6 +26,9 @@ import {
   createWebhookSchema,
 } from "../../services/webhook/schema";
 import { BrandingProfile } from "../../types/branding";
+import { ProductProfile } from "../../types/product";
+import { MenuProfile } from "../../types/menu";
+import { threatProtectionOverrideSchema } from "../../lib/threat-protection/config";
 
 // Base URL schema with common validation logic
 export const URL = z.preprocess(
@@ -458,6 +461,8 @@ export type FormatObject =
   | HighlightsFormatWithOptions
   | QueryFormatWithOptions
   | { type: "branding" }
+  | { type: "product" }
+  | { type: "menu" }
   | { type: "audio" }
   | { type: "video" };
 
@@ -629,6 +634,8 @@ const baseScrapeOptions = z.strictObject({
           screenshotFormatWithOptions,
           attributesFormatWithOptions,
           z.strictObject({ type: z.literal("branding") }),
+          z.strictObject({ type: z.literal("product") }),
+          z.strictObject({ type: z.literal("menu") }),
           questionFormatWithOptions,
           highlightsFormatWithOptions,
           queryFormatWithOptions,
@@ -686,6 +693,9 @@ const baseScrapeOptions = z.strictObject({
   storeInCache: z.boolean().prefault(true),
   lockdown: z.boolean().prefault(false),
   redactPII: redactPIISchema,
+  // Enterprise: per-request field-level override of the org's threat
+  // protection policy. Gated on the team flag + org config (checkPermissions).
+  threatProtection: threatProtectionOverrideSchema.optional(),
 
   profile: z
     .object({
@@ -718,6 +728,18 @@ const waitForRefineOpts = {
   path: ["waitFor"],
 };
 
+export const applyScrapeOptionsDefaults = <T extends ScrapeOptionsBase>(
+  obj: T,
+): T & { skipTlsVerification: boolean } => ({
+  ...obj,
+  skipTlsVerification:
+    obj.skipTlsVerification ??
+    ((obj.headers && Object.keys(obj.headers).length > 0) ||
+    (obj.actions && obj.actions.length > 0)
+      ? false
+      : true),
+});
+
 // Base transform function that handles both nullable and non-nullable cases
 // Uses generic type to preserve all fields from extended schemas
 const extractTransformImpl = <T extends ScrapeOptionsBase | undefined>(
@@ -725,7 +747,7 @@ const extractTransformImpl = <T extends ScrapeOptionsBase | undefined>(
 ): T extends undefined ? undefined : T => {
   if (!obj) return obj as T extends undefined ? undefined : T;
   // Handle timeout
-  let result = { ...obj };
+  let result = applyScrapeOptionsDefaults(obj);
   if (
     obj.formats.find(x => typeof x === "object" && x.type === "json") &&
     obj.timeout === 30000
@@ -862,6 +884,7 @@ const extractOptions = z
     __experimental_showCostTracking: z.boolean().prefault(false),
     ignoreInvalidURLs: z.boolean().prefault(true),
     webhook: webhookSchema.optional(),
+    threatProtection: threatProtectionOverrideSchema.optional(),
   })
   .refine(obj => obj.urls || obj.prompt, {
     error: "Either 'urls' or 'prompt' must be provided.",
@@ -922,6 +945,7 @@ export const agentRequestSchema = z.strictObject({
 
   overrideWhitelist: z.string().optional(),
   model: z.enum(["spark-1-pro", "spark-1-mini"]).default("spark-1-pro"),
+  threatProtection: threatProtectionOverrideSchema.optional(),
 });
 
 export type AgentRequest = z.infer<typeof agentRequestSchema>;
@@ -1173,6 +1197,7 @@ const mapRequestSchemaBase = crawlerOptions
     ignoreCache: z.boolean().prefault(false),
     location: locationSchema,
     headers: z.record(z.string(), z.string()).optional(),
+    threatProtection: threatProtectionOverrideSchema.optional(),
   });
 
 export const mapRequestSchema = strictWithMessage(mapRequestSchemaBase);
@@ -1204,6 +1229,8 @@ export type Document = {
   answer?: string;
   highlights?: string;
   branding?: BrandingProfile;
+  product?: ProductProfile;
+  menu?: MenuProfile;
   warning?: string;
   attributes?: {
     selector: string;
@@ -1282,6 +1309,7 @@ export type Document = {
     scrapeId?: string;
     error?: string;
     numPages?: number;
+    totalPages?: number;
     contentType?: string;
     timezone?: string;
     proxyUsed: "basic" | "stealth";
@@ -1357,6 +1385,7 @@ export interface URLTrace {
 
 export interface ExtractResponse {
   success: boolean;
+  code?: ErrorCodes;
   error?: string;
   data?: any;
   scrape_id?: string;
@@ -1513,6 +1542,7 @@ type Account = {
 export type TeamFlags = {
   ignoreRobots?: "disabled" | "allowed" | "forced";
   customRobotsAgent?: "disabled" | "allowed";
+  threatProtection?: "disabled" | "allowed" | "forced";
   unblockedDomains?: string[];
   forceZDR?: boolean;
   allowZDR?: boolean;
@@ -1522,11 +1552,30 @@ export type TeamFlags = {
   checkRobotsOnScrape?: boolean;
   crawlTtlHours?: number;
   ipWhitelist?: boolean;
+  // gates the per-team API key IP allowlist (ip_restriction_config table)
+  ipRestriction?: boolean;
+  // gates the per-key scope/format lockdown (key_restriction_config table)
+  keyRestriction?: boolean;
   bypassCreditChecks?: boolean;
   debugBranding?: boolean;
   maxBrowserSessions?: number;
   researchBeta?: boolean;
   highlightsBeta?: boolean;
+  menuBeta?: boolean;
+  enrichBeta?: boolean;
+  professionalProfileCompanyDataBeta?: boolean;
+  organizationDataSourceAccess?: Record<
+    string,
+    {
+      status?: "enabled" | "disabled" | "suspended" | string | null;
+      termsKey?: string | null;
+      termsVersion?: string | null;
+      termsAcceptedAt?: string | null;
+      enabledAt?: string | null;
+      disabledAt?: string | null;
+      disabledReason?: string | null;
+    }
+  >;
 } | null;
 
 interface RequestWithMaybeACUC<
@@ -1773,6 +1822,10 @@ export function fromV1ScrapeOptions(
             return { type: "screenshot" as const, fullPage: true };
           } else if (x === "branding") {
             return { type: "branding" as const };
+          } else if (x === "product") {
+            return { type: "product" as const };
+          } else if (x === "menu") {
+            return { type: "menu" as const };
           } else {
             return x;
           }
@@ -1912,6 +1965,7 @@ export const searchRequestSchema = z
     // scrapeURL. Falls back to the provider snippet when the URL isn't indexed.
     highlights: z.boolean().optional().prefault(false),
     __searchPreviewToken: z.string().optional(),
+    threatProtection: threatProtectionOverrideSchema.optional(),
     scrapeOptions: baseScrapeOptions
       .extend({
         formats: z
@@ -1933,6 +1987,8 @@ export const searchRequestSchema = z
                 z.strictObject({ type: z.literal("links") }),
                 z.strictObject({ type: z.literal("images") }),
                 z.strictObject({ type: z.literal("summary") }),
+                z.strictObject({ type: z.literal("product") }),
+                z.strictObject({ type: z.literal("menu") }),
                 jsonFormatWithOptions,
                 questionFormatWithOptions,
                 highlightsFormatWithOptions,

@@ -341,6 +341,71 @@ export async function scrapeStopInteractiveBrowserRaw(
 }
 
 // =========================================
+// Interact (standalone browser sessions)
+// =========================================
+
+export async function browserCreateRaw(
+  body: {
+    ttl?: number;
+    activityTtl?: number;
+    recordSession?: boolean;
+  },
+  identity: Identity,
+) {
+  return await request(TEST_API_URL)
+    .post("/v2/interact")
+    .set("Authorization", `Bearer ${identity.apiKey}`)
+    .set("Content-Type", "application/json")
+    .send(body);
+}
+
+export async function browserExecuteRaw(
+  sessionId: string,
+  body: {
+    code: string;
+    language?: "python" | "node" | "bash";
+    timeout?: number;
+  },
+  identity: Identity,
+) {
+  return await request(TEST_API_URL)
+    .post("/v2/interact/" + encodeURIComponent(sessionId) + "/execute")
+    .set("Authorization", `Bearer ${identity.apiKey}`)
+    .set("Content-Type", "application/json")
+    .send(body);
+}
+
+export async function browserDeleteRaw(sessionId: string, identity: Identity) {
+  return await request(TEST_API_URL)
+    .delete("/v2/interact/" + encodeURIComponent(sessionId))
+    .set("Authorization", `Bearer ${identity.apiKey}`)
+    .send();
+}
+
+export async function browserReplayRaw(sessionId: string, identity: Identity) {
+  return await request(TEST_API_URL)
+    .get("/v2/interact/" + encodeURIComponent(sessionId) + "/replay")
+    .set("Authorization", `Bearer ${identity.apiKey}`)
+    .send();
+}
+
+export async function browserReplayPageRaw(
+  sessionId: string,
+  pageId: string,
+  identity: Identity,
+) {
+  return await request(TEST_API_URL)
+    .get(
+      "/v2/interact/" +
+        encodeURIComponent(sessionId) +
+        "/replay/" +
+        encodeURIComponent(pageId),
+    )
+    .set("Authorization", `Bearer ${identity.apiKey}`)
+    .send();
+}
+
+// =========================================
 // Crawl API
 // =========================================
 
@@ -636,6 +701,26 @@ export async function searchWithFailure(
   const raw = await searchRaw(body, identity);
   expectSearchToFail(raw);
   return raw.body;
+}
+
+export async function researchRaw(
+  path: string,
+  query: Record<string, string | number | boolean | string[]> | undefined,
+  identity?: Identity,
+  headers?: Record<string, string>,
+) {
+  const req = request(TEST_API_URL)
+    .get(path)
+    .set("Content-Type", "application/json");
+  if (identity) {
+    req.set("Authorization", `Bearer ${identity.apiKey}`);
+  }
+  if (headers) {
+    for (const [key, value] of Object.entries(headers)) {
+      req.set(key, value);
+    }
+  }
+  return query ? req.query(query) : req;
 }
 
 export async function searchRawFull(
