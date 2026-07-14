@@ -29,6 +29,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
+# FoundationDB client library (libfdb_c + headers), needed by the
+# `foundationdb` npm package at install time on arches without prebuilds
+ARG FDB_VERSION=7.3.63
+RUN ARCH=$(dpkg --print-architecture) && \
+    case "$ARCH" in arm64) FDB_ARCH=aarch64 ;; *) FDB_ARCH=$ARCH ;; esac && \
+    curl -fsSL -o /tmp/fdb-clients.deb \
+      "https://github.com/apple/foundationdb/releases/download/${FDB_VERSION}/foundationdb-clients_${FDB_VERSION}-1_${FDB_ARCH}.deb" && \
+    dpkg -i /tmp/fdb-clients.deb && rm /tmp/fdb-clients.deb
+
 # Install Rust
 ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
@@ -39,6 +48,7 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no
 
 # Copy package files first for better layer caching
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
+COPY patches ./patches
 # Copy native module files which are a workspace dependency
 COPY native ./native/
 
@@ -70,8 +80,17 @@ ENV NODE_OPTIONS="--max-old-space-size=4096"
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     procps \
+    curl \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+
+# FoundationDB client library (libfdb_c + fdbcli)
+ARG FDB_VERSION=7.3.63
+RUN ARCH=$(dpkg --print-architecture) && \
+    case "$ARCH" in arm64) FDB_ARCH=aarch64 ;; *) FDB_ARCH=$ARCH ;; esac && \
+    curl -fsSL -o /tmp/fdb-clients.deb \
+      "https://github.com/apple/foundationdb/releases/download/${FDB_VERSION}/foundationdb-clients_${FDB_VERSION}-1_${FDB_ARCH}.deb" && \
+    dpkg -i /tmp/fdb-clients.deb && rm /tmp/fdb-clients.deb
 
 EXPOSE 8080
 WORKDIR /app
