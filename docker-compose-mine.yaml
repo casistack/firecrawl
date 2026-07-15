@@ -65,7 +65,7 @@ services:
       nuq-postgres:
         condition: service_started
       rabbitmq:
-        condition: service_started
+        condition: service_healthy
 
   playwright-service:
     build:
