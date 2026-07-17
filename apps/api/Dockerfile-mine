@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# Optimized Dockerfile for Coolify builds (no BuildKit cache mounts)
+# Optimized Dockerfile for Coolify builds with persistent dependency caches.
 
 # Build Go shared library in parallel
 FROM golang:1.24 AS go-build
@@ -52,8 +52,13 @@ COPY patches ./patches
 # Copy native module files which are a workspace dependency
 COPY native ./native/
 
-# Install dependencies with optimizations
-RUN pnpm config set network-timeout 300000 && \
+# Persist pnpm downloads and Rust compilation artifacts across builds. This is
+# especially important on Coolify because its remote command timeout can stop a
+# cold native build before Docker can commit the layer.
+RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
+    --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/app/native/target \
+    pnpm config set network-timeout 300000 && \
     pnpm install --frozen-lockfile
 
 # Build stage
