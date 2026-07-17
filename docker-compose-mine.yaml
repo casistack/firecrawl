@@ -147,7 +147,9 @@ services:
         reservations:
           memory: 512M
     healthcheck:
-      test: ["CMD", "timeout", "-k", "2s", "8s", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+      # Avoid rabbitmq-diagnostics here: each probe starts an Erlang VM whose
+      # child process can survive Docker's health-check timeout under CPU load.
+      test: ["CMD", "timeout", "-k", "1s", "2s", "bash", "-ec", "exec 3<>/dev/tcp/127.0.0.1/5672"]
       interval: 30s
       timeout: 10s
       retries: 3
