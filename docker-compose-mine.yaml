@@ -153,7 +153,9 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s
+      # Persistent-volume recovery took 3m24s on the Coolify VM; keep startup
+      # failures from exhausting retries before the AMQP listener is ready.
+      start_period: 5m
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
 
